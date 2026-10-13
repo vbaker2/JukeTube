@@ -118,3 +118,25 @@ def test_mpv_ignores_stale_events_from_previous_track():
     assert p.position == 1.5 and p._loading_since is None
     p._handle({"event": "end-file", "reason": "eof"})
     assert p._finished == "eof" and not p._busy
+
+
+def test_account_cookie_args():
+    from jukebox.player import ytdl_account_args
+
+    assert ytdl_account_args({}) == []
+    assert ytdl_account_args({"cookies_from_browser": "chrome"}) == [
+        "--ytdl-raw-options-append=cookies-from-browser=chrome"]
+    args = ytdl_account_args({"cookies_file": "~/c.txt", "cookies_from_browser": "chrome"})
+    assert args == [f"--ytdl-raw-options-append=cookies={os.path.expanduser('~/c.txt')}"]
+
+
+def test_bundled_fonts_render_cyrillic_and_estonian():
+    from jukebox.ui.theme import FONTS
+
+    # A font without a glyph draws the same "missing" box for every such
+    # letter, so distinct letters rendering identically means they're missing.
+    for path in FONTS.values():
+        f = pygame.font.Font(path, 32)
+        shapes = {pygame.image.tobytes(f.render(ch, True, (255, 255, 255)), "RGBA")
+                  for ch in "ЖЯЮЩõšž"}
+        assert len(shapes) == 7, path

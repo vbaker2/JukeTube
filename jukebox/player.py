@@ -349,6 +349,18 @@ class SimulatedPlayer(Player):
             return reason
 
 
+def ytdl_account_args(cfg: dict) -> list[str]:
+    """mpv args that make yt-dlp stream as the user's YouTube account (needed
+    for Premium audio quality). Uses a logged-in browser's cookies or an
+    exported cookies.txt; with neither, playback is anonymous."""
+    if cfg.get("cookies_file"):
+        path = os.path.expanduser(cfg["cookies_file"])
+        return [f"--ytdl-raw-options-append=cookies={path}"]
+    if cfg.get("cookies_from_browser"):
+        return [f"--ytdl-raw-options-append=cookies-from-browser={cfg['cookies_from_browser']}"]
+    return []
+
+
 def create_player(cfg: dict, simulate: bool = False) -> tuple[Player, str | None]:
     """Build the configured player. Returns (player, warning)."""
     volume = int(cfg.get("volume", 80))
@@ -363,7 +375,7 @@ def create_player(cfg: dict, simulate: bool = False) -> tuple[Player, str | None
     try:
         return MpvPlayer(mpv, find_ytdlp(cfg.get("ytdlp_path")), volume=volume,
                          audio_device=cfg.get("audio_device"),
-                         extra_args=cfg.get("mpv_args")), None
+                         extra_args=ytdl_account_args(cfg) + list(cfg.get("mpv_args") or [])), None
     except Exception as exc:  # pragma: no cover - environment specific
         log.exception("Failed to start mpv")
         return SimulatedPlayer(), f"Audio unavailable ({exc}) - running silent."

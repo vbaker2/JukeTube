@@ -22,7 +22,7 @@ THEMES = {
         "warn": (255, 200, 40),
         "good": (90, 240, 140),
     },
-    "classic": {  # warm wood-and-chrome Wurlitzer vibe
+    "classic": {  # warm wood-and-chrome, old British pub jukebox
         "bg_top": (40, 14, 8),
         "bg_bottom": (12, 4, 2),
         "panel": (62, 28, 16),
@@ -39,9 +39,11 @@ THEMES = {
 # Bundled (SIL OFL) so the cabinet looks the same whatever OS it runs.
 FONT_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
 FONTS = {
-    "regular": FONT_DIR / "Barlow-Medium.ttf",
-    "bold": FONT_DIR / "Barlow-Bold.ttf",
-    "title": FONT_DIR / "Orbitron.ttf",
+    # All three cover Latin (incl. Estonian õ/š/ž) and Cyrillic, so Russian
+    # titles render properly instead of as boxes.
+    "regular": FONT_DIR / "FiraSansCondensed-Medium.ttf",
+    "bold": FONT_DIR / "FiraSansCondensed-Bold.ttf",
+    "title": FONT_DIR / "RussoOne.ttf",
 }
 
 
@@ -58,8 +60,6 @@ class Theme:
             path = FONTS["title" if title else "bold" if bold else "regular"]
             try:
                 f = pygame.font.Font(path, size)
-                if title:
-                    f.bold = bold or True  # Orbitron's default weight is thin
             except (OSError, pygame.error):
                 f = pygame.font.Font(None, int(size * 1.3))
             self._fonts[key] = f

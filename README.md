@@ -4,7 +4,8 @@ A fullscreen, joystick-driven jukebox for arcade cabinets. It streams from
 **YouTube Music** today; providers are pluggable so others can be added later.
 
 - **Chart tabs** for the UK, Russia and Estonia (configurable), each opening on
-  that country's Top 100. You can also browse **genres** and YouTube Music's home shelves (UK
+  that country's Top 100. You can also browse British and European **genres** (Britpop, Madchester,
+  2 Tone, Northern Soul, rave, Eurodance, Italo disco, Русский рок, Eesti muusika…) and YouTube Music's home shelves (UK
   region by default), or **search** with an on-screen arcade keyboard (or a real keyboard).
 - Pick songs into a request queue; queue a whole playlist/album with one button.
 - **Credits**: free play, or coin-op mode where the COIN button buys songs.
@@ -105,13 +106,33 @@ name = "US"
 country = "US"
 
 [display]
-theme = "classic"        # warm Wurlitzer colours instead of neon
+theme = "classic"        # warm wood-and-chrome colours instead of neon
 ```
 
-**Optional YouTube Music sign-in.** Search, charts, genres and playback all
-work without an account. To add a "Your Library" menu with your own
-playlists, run `.venv/bin/ytmusicapi browser`, follow its prompts, and set
-`auth_file` under `[source.ytmusic]` to the file it writes.
+### Using your YouTube Music Premium account
+
+Out of the box the jukebox uses **no account**: browsing and playback are
+anonymous, at standard audio quality. There are two separate places an
+account can plug in:
+
+1. **Playback (Premium sound quality).** yt-dlp streams using your account's
+   cookies. Set one of these under `[audio]`:
+   ```toml
+   cookies_from_browser = "chrome"   # a browser on this machine signed in to music.youtube.com
+   # or
+   cookies_file = "~/jukebox-cookies.txt"   # exported from a signed-in browser
+   ```
+   On a cabinet with no browser, sign in on another computer, export
+   `cookies.txt` for youtube.com (e.g. with a "Get cookies.txt LOCALLY"
+   extension), copy it over and use `cookies_file`. Cookies expire every few
+   months; re-export if playback starts failing.
+2. **Browsing (your library and personal home feed).** Run
+   `.venv/bin/ytmusicapi browser`, follow its prompts (it asks you to paste
+   request headers from a signed-in browser), and set `auth_file` under
+   `[source.ytmusic]` to the file it writes. This adds "Your Library" and
+   makes the home shelves follow your own listening.
+
+Keep these files private: they give access to your Google account.
 
 ## Putting it on the cabinet
 
@@ -155,5 +176,5 @@ can open (local files, HTTP streams, other yt-dlp sites) works as a
   account/subscription, for personal use, in line with YouTube's terms.
 - Tested on macOS with real playback. Linux should work the same way. On
   Windows, the mpv named-pipe IPC path is implemented but hasn't been tested yet.
-- Fonts: Orbitron and Barlow Semi Condensed, both SIL Open Font License (see
-  `jukebox/assets/fonts`).
+- Fonts: Russo One and Fira Sans Condensed, both SIL Open Font License (see
+  `jukebox/assets/fonts`). Both cover Cyrillic and Estonian letters.

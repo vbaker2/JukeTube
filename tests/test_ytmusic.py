@@ -135,7 +135,6 @@ def test_expand_variants():
     assert isinstance(artist[0], Track) and artist[-1].kind == "album"
     genres = s.expand(Collection("menu", "Genres", "genres"))
     assert genres[0].kind == "genre"
-    assert s.expand(genres[0])[0].kind == "playlist"
 
 
 def test_expand_broken_playlist_raises_friendly_error():
@@ -177,3 +176,45 @@ def test_house_music_comes_from_first_chart():
 def test_house_music_falls_back_when_charts_broken():
     tracks = src(broken={"charts"}).house_music()
     assert [t.id for t in tracks] == ["p1"]  # first home playlist
+
+
+class GenreYT(FakeYT):
+    def search(self, query, filter=None, limit=20):
+        self.genre_queries = getattr(self, "genre_queries", []) + [(query, filter)]
+        if filter == "featured_playlists":
+            return [{"title": "Britpop Anthems", "playlistId": "PL1"},
+                    {"title": "'90s Punjabi Party", "playlistId": "PL2"},  # no keyword
+                    {"title": "Britpop R&B Chill", "playlistId": "PL3"}]  # excluded style
+        return [{"title": "100 Best Britpop Songs", "playlistId": "PL4"},
+                {"title": "Britpop Anthems", "playlistId": "PL1"}]  # duplicate
+
+
+def test_genre_keeps_only_matching_european_playlists():
+    s = YouTubeMusicSource(client=GenreYT())
+    items = s.expand(Collection("genre", "Britpop", "Britpop"))
+    assert [i.title for i in items] == ["Britpop Anthems", "100 Best Britpop Songs"]
+    assert s.yt.genre_queries == [("britpop", "featured_playlists"), ("britpop", "community_playlists")]
+
+
+def test_genre_menu_is_european_with_descriptions():
+    menu = src().expand(Collection("menu", "Genres", "genres"))
+    names = [c.title for c in menu]
+    assert "Britpop" in names and "Русский рок" in names and "Eesti muusika" in names
+    assert not any(x in " ".join(names) for x in ("Hip-Hop", "R&B", "Country"))
+    assert menu[names.index("Britpop")].subtitle.startswith("Oasis")
+
+
+def test_custom_genres_accept_plain_names():
+    s = YouTubeMusicSource(client=GenreYT(), genres=["Britpop"], genre_exclude=[])
+    assert [c.title for c in s.expand(Collection("menu", "G", "genres"))] == ["Britpop"]
+    titles = [i.title for i in s.expand(Collection("genre", "Britpop", "Britpop"))]
+    assert "Britpop R&B Chill" in titles  # exclusions switched off
+
+
+def test_genre_with_no_matches_errors_politely():
+    class Empty(FakeYT):
+        def search(self, *a, **k):
+            return []
+
+    with pytest.raises(SourceError):
+        YouTubeMusicSource(client=Empty()).expand(Collection("genre", "Britpop", "Britpop"))

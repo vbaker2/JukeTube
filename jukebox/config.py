@@ -26,6 +26,10 @@ DEFAULTS: dict = {
         "mpv_path": "",
         "ytdlp_path": "",
         "audio_device": "",
+        # Stream as your YouTube account (Premium audio quality): name a browser
+        # you're logged into YouTube Music with, or point at a cookies.txt.
+        "cookies_from_browser": "",
+        "cookies_file": "",
         "mpv_args": [],
     },
     "jukebox": {

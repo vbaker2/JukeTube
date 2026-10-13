@@ -19,11 +19,75 @@ from .base import Source, SourceError
 
 log = logging.getLogger(__name__)
 
+# British and European styles, roughly in order of era. Each genre is found by
+# searching playlists for `query`; only playlists whose title contains one of
+# `match` are kept, because YouTube's playlist search pads niche queries with
+# unrelated (often Bollywood or US country) playlists.
 DEFAULT_GENRES = [
-    "Pop", "Rock", "Hip-Hop", "R&B", "Dance & Electronic", "Country",
-    "Indie & Alternative", "Metal", "Classic Rock", "80s", "90s", "2000s",
-    "Disco", "Funk", "Soul", "Reggae", "Latin", "Jazz", "Blues", "Punk",
-    "Classical", "Soundtracks", "Video Game Music", "Chill",
+    {"name": "60s British Invasion", "about": "The Beatles, The Kinks, The Who, The Rolling Stones",
+     "query": "60s british invasion", "match": ["60s", "sixties", "british invasion", "merseybeat"]},
+    {"name": "70s Glam Rock", "about": "Bowie, T. Rex, Slade, Sweet, Roxy Music",
+     "query": "70s glam rock", "match": ["glam"]},
+    {"name": "Punk & New Wave", "about": "Sex Pistols, The Clash, The Jam, Buzzcocks",
+     "query": "british punk new wave", "match": ["punk", "new wave"]},
+    {"name": "2 Tone & Ska", "about": "The Specials, Madness, The Beat, The Selecter",
+     "query": "2 tone ska", "match": ["ska", "2 tone", "two tone", "2-tone"]},
+    {"name": "Northern Soul", "about": "Wigan Casino all-nighters",
+     "query": "northern soul", "match": ["northern soul"]},
+    {"name": "New Romantics & Synth-pop", "about": "Duran Duran, Depeche Mode, Pet Shop Boys",
+     "query": "new romantics synth pop", "match": ["new romantic", "synth", "new wave"]},
+    {"name": "80s Hits", "about": "The big hits of the eighties",
+     "query": "80s hits", "match": ["80s", "eighties"]},
+    {"name": "Madchester", "about": "The Stone Roses, Happy Mondays, Inspiral Carpets",
+     "query": "madchester", "match": ["madchester", "baggy"]},
+    {"name": "Britpop", "about": "Oasis, Blur, Pulp, Suede, Supergrass",
+     "query": "britpop", "match": ["britpop", "brit pop", "brit-pop"]},
+    {"name": "90s Hits", "about": "The big hits of the nineties",
+     "query": "90s hits", "match": ["90s", "nineties"]},
+    {"name": "Rave & Acid House", "about": "The Prodigy, Altern-8, SL2, 808 State",
+     "query": "90s rave anthems", "match": ["rave", "acid house", "hardcore"]},
+    {"name": "Drum & Bass and Jungle", "about": "Goldie, Roni Size, LTJ Bukem",
+     "query": "drum and bass jungle classics", "match": ["drum", "jungle", "dnb", "d&b"]},
+    {"name": "UK Garage", "about": "Artful Dodger, Craig David, Shanks & Bigfoot",
+     "query": "uk garage classics", "match": ["garage", "ukg"]},
+    {"name": "Big Beat & Trip Hop", "about": "Fatboy Slim, The Chemical Brothers, Massive Attack",
+     "query": "big beat trip hop", "match": ["big beat", "trip hop", "trip-hop"]},
+    {"name": "Eurodance", "about": "2 Unlimited, Haddaway, Culture Beat, Snap!",
+     "query": "eurodance 90s", "match": ["eurodance", "euro dance", "90s dance"]},
+    {"name": "Italo Disco", "about": "Den Harrow, Gazebo, Ryan Paris",
+     "query": "italo disco", "match": ["italo"]},
+    {"name": "Trance", "about": "Tiësto, ATB, Paul van Dyk, Darude",
+     "query": "trance classics", "match": ["trance"]},
+    {"name": "2000s Indie", "about": "Arctic Monkeys, The Libertines, Kaiser Chiefs",
+     "query": "2000s british indie", "match": ["indie"]},
+    {"name": "2000s Hits", "about": "The big hits of the noughties",
+     "query": "2000s hits", "match": ["2000s", "00s", "noughties"]},
+    {"name": "Eurovision", "about": "Douze points",
+     "query": "eurovision", "match": ["eurovision"]},
+    {"name": "British Heavy Metal", "about": "Iron Maiden, Judas Priest, Black Sabbath",
+     "query": "nwobhm british heavy metal", "match": ["nwobhm", "heavy metal", "metal"]},
+    {"name": "Folk & Celtic", "about": "British and Irish folk",
+     "query": "british irish folk celtic", "match": ["folk", "celtic", "irish"]},
+    {"name": "French Chanson", "about": "Édith Piaf, Charles Aznavour, Jacques Brel",
+     "query": "chanson française", "match": ["chanson", "french", "française", "francaise"]},
+    {"name": "Schlager", "about": "German party classics",
+     "query": "schlager", "match": ["schlager"]},
+    {"name": "Русский рок", "about": "Кино, ДДТ, Сплин, Би-2",
+     "query": "русский рок", "match": ["рок", "rock"]},
+    {"name": "Русская поп-музыка", "about": "Russian pop of the 90s and 2000s",
+     "query": "русская поп музыка хиты", "match": ["поп", "хит", "русск", "russian"]},
+    {"name": "Eesti muusika", "about": "Ultima Thule, Terminaator, Smilers, Vaiko Eplik",
+     "query": "eesti muusika", "match": ["eesti", "estonia"]},
+    {"name": "Classical", "about": "The great European composers",
+     "query": "classical essentials", "match": ["classical", "symphon", "orchestra", "opera"]},
+]
+
+# Playlists whose titles contain any of these are dropped from genre lists:
+# keeps the browse menus British/European rather than US or other regions.
+DEFAULT_GENRE_EXCLUDE = [
+    "r&b", "rnb", "hip hop", "hip-hop", "hiphop", "rap", "trap", "country", "cantopop",
+    "mandopop", "k-pop", "kpop", "j-pop", "punjabi", "bollywood", "hindi", "tamil", "telugu",
+    "egyptian", "arabic", "latin", "reggaeton", "naija", "afro", "gospel", "lullab",
 ]
 
 # Each entry becomes its own "<name> Charts" tab on the home screen.
@@ -87,7 +151,8 @@ class YouTubeMusicSource(Source):
         location: str = "GB",
         charts: list[dict] | None = None,
         allow_explicit: bool = True,
-        genres: list[str] | None = None,
+        genres: list[str | dict] | None = None,
+        genre_exclude: list[str] | None = None,
         client: Any = None,
     ):
         if client is None:
@@ -98,7 +163,10 @@ class YouTubeMusicSource(Source):
         self.authenticated = bool(auth_file)
         self.charts = [c for c in (charts if charts is not None else DEFAULT_CHARTS) if c.get("country")]
         self.allow_explicit = allow_explicit
-        self.genres = genres or DEFAULT_GENRES
+        # Config may give plain names ("Britpop") or full {name, query, match, about} tables.
+        self.genre_exclude = [x.lower() for x in (DEFAULT_GENRE_EXCLUDE if genre_exclude is None
+                                                  else genre_exclude)]
+        self.genres = [{"name": g} if isinstance(g, str) else g for g in (genres or DEFAULT_GENRES)]
 
     # ------------------------------------------------------------------ parse
     def _track(self, data: dict, album: str = "", art_url: str | None = None) -> Track | None:
@@ -219,13 +287,7 @@ class YouTubeMusicSource(Source):
         if c.kind == "chart":
             return self._expand_chart(c.ref)
         if c.kind == "genre":
-            # A bare genre name tends to surface regional playlists first;
-            # "<genre> essentials" reliably finds YouTube Music's curated ones.
-            query = f"{c.ref} essentials"
-            rows = self._safe("genre", self.yt.search, query, filter="featured_playlists", limit=20)
-            if not rows:
-                rows = self._safe("genre", self.yt.search, query, filter="playlists", limit=20)
-            return [i for i in (self._collection(r) for r in rows or []) if i]
+            return self._expand_genre(c.ref)
         if c.kind == "playlist":
             data = self._safe("playlist", self.yt.get_playlist, c.ref, limit=200)
             if data is None:
@@ -253,11 +315,38 @@ class YouTubeMusicSource(Source):
 
     def _expand_menu(self, ref: str) -> list[Item]:
         if ref == "genres":
-            return [Collection("genre", g, g, subtitle="Genre", source=self.name) for g in self.genres]
+            return [Collection("genre", g["name"], g["name"], subtitle=g.get("about") or "Genre",
+                               source=self.name) for g in self.genres]
         if ref == "library":
             rows = self._safe("library", self.yt.get_library_playlists, limit=100) or []
             return [i for i in (self._collection(r) for r in rows) if i]
         raise SourceError(f"Unknown menu {ref}")
+
+    def _genre(self, name: str) -> dict:
+        for g in self.genres:
+            if g["name"] == name:
+                return g
+        return {"name": name}
+
+    def _expand_genre(self, name: str) -> list[Item]:
+        g = self._genre(name)
+        query = g.get("query") or name
+        match = [m.lower() for m in g.get("match") or [name]]
+        found: list[Collection] = []
+        seen: set[str] = set()
+        # YouTube Music's own curated playlists first, then listener-made ones,
+        # which are far more literal for niche scenes like Madchester.
+        for flt in ("featured_playlists", "community_playlists"):
+            for row in self._safe(f"genre[{flt}]", self.yt.search, query, filter=flt, limit=20) or []:
+                col = self._collection(row)
+                title = col.title.lower() if col else ""
+                if (col and col.ref not in seen and any(m in title for m in match)
+                        and not any(re.search(rf"\b{re.escape(x)}", title) for x in self.genre_exclude)):
+                    seen.add(col.ref)
+                    found.append(col)
+        if not found:
+            raise SourceError(f"No {name} playlists found right now")
+        return found
 
     def _expand_chart(self, country: str) -> list[Item]:
         """A country's chart: its Top 100 songs first, then the other chart

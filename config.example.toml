@@ -18,6 +18,13 @@ volume_step = 5
 mpv_path = ""         # blank = find mpv on PATH
 ytdlp_path = ""       # blank = the yt-dlp installed with the jukebox
 audio_device = ""     # e.g. "alsa/plughw:CARD=Device"; `mpv --audio-device=help` lists them
+
+# Your YouTube Music Premium account, for playback. Without one of these the
+# jukebox streams anonymously at standard quality. Pick ONE:
+cookies_from_browser = ""   # "chrome", "firefox", "edge", "safari"... a browser on
+                            # this machine that is signed in to music.youtube.com
+cookies_file = ""           # or a cookies.txt exported from a signed-in browser
+                            # (best for a cabinet with no browser on it)
 mpv_args = []
 
 [jukebox]
