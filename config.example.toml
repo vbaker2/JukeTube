@@ -1,0 +1,84 @@
+# Jukebox configuration. Copy to ~/.config/jukebox/config.toml (Linux/macOS)
+# or %APPDATA%\jukebox\config.toml (Windows), or pass --config <path>.
+# Anything you leave out uses the built-in default shown here.
+
+[display]
+fullscreen = true
+width = 1280          # logical resolution; scaled to fit the real screen
+height = 720
+fps = 60
+hide_cursor = true
+title = "JUKEBOX"     # marquee text
+attract_after = 45    # seconds without input before the big now-playing screen (0 = never)
+theme = "neon"        # "neon" or "classic"
+
+[audio]
+volume = 80
+volume_step = 5
+mpv_path = ""         # blank = find mpv on PATH
+ytdlp_path = ""       # blank = the yt-dlp installed with the jukebox
+audio_device = ""     # e.g. "alsa/plughw:CARD=Device"; `mpv --audio-device=help` lists them
+mpv_args = []
+
+[jukebox]
+free_play = true            # false = songs cost credits; COIN button adds them
+songs_per_credit = 1        # songs granted per coin
+max_credits = 99
+max_queue = 50              # max paid requests waiting
+max_per_track_in_queue = 1  # stop the same song being queued twice
+allow_skip = true
+autoplay = true             # play "house music" when the queue is empty
+autoplay_delay = 3          # seconds of silence before autoplay starts
+autoplay_seed = ""          # optional YouTube Music playlist id for house music
+interrupt_autoplay = true   # a paid request cuts off house music immediately
+
+[source]
+name = "ytmusic"
+
+[source.ytmusic]
+# Optional: browser auth headers file made with `ytmusicapi browser`.
+# Enables a "Your Library" menu with your saved playlists. Not needed
+# for search, charts, genres or playback.
+auth_file = ""
+language = "en"
+location = ""          # two-letter country code for localised results, e.g. "GB"
+chart_country = "ZZ"   # "ZZ" = global charts; or e.g. "US", "GB"
+allow_explicit = true
+
+# Controls. Key names are pygame names ("left ctrl", "return", "a", "1"...).
+# The defaults match MAME's player-1 layout, which most keyboard encoders
+# (I-PAC, etc.) send. Run `jukebox --list-inputs` to see what your
+# cabinet's buttons send.
+[controls]
+repeat_delay = 0.35   # seconds before a held direction starts repeating
+repeat_rate = 0.07    # seconds between repeats
+
+[controls.keyboard]
+up = ["up"]
+down = ["down"]
+left = ["left"]         # page up in lists
+right = ["right"]       # page down in lists
+select = ["left ctrl", "return"]
+back = ["left alt", "backspace"]
+alt = ["space", "tab"]  # queue a whole playlist/album
+skip = ["left shift"]
+pause = ["z", "p"]
+start = ["1"]           # jump to search
+coin = ["5"]
+volume_up = ["x", "=", "+", "page up"]
+volume_down = ["c", "-", "page down"]
+exit = ["escape"]
+
+# USB joystick encoders (Zero Delay, Xin-Mo, etc.). The stick/d-pad is
+# picked up automatically; map button numbers to actions here.
+[controls.joystick]
+select = [0]
+back = [1]
+alt = [2]
+skip = [3]
+pause = [4]
+volume_down = [5]
+volume_up = [6]
+coin = [8]
+start = [9]
+deadzone = 0.5
