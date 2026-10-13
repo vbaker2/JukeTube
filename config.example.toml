@@ -30,6 +30,8 @@ allow_skip = true
 autoplay = true             # play "house music" when the queue is empty
 autoplay_delay = 3          # seconds of silence before autoplay starts
 autoplay_seed = ""          # optional YouTube Music playlist id for house music
+                            # (default: shuffled songs from the first chart below)
+autoplay_radio = false      # true = follow on with songs similar to the last one played
 interrupt_autoplay = true   # a paid request cuts off house music immediately
 
 [source]
@@ -41,9 +43,23 @@ name = "ytmusic"
 # for search, charts, genres or playback.
 auth_file = ""
 language = "en"
-location = ""          # two-letter country code for localised results, e.g. "GB"
-chart_country = "ZZ"   # "ZZ" = global charts; or e.g. "US", "GB"
+location = "GB"        # country for the home feed and search results
 allow_explicit = true
+
+# One "<name> Charts" tab per entry, in this order on the home screen. The
+# first chart also supplies the house music. country is a two-letter code
+# ("US", "DE", "FR"...) or "ZZ" for global.
+[[source.ytmusic.charts]]
+name = "UK"
+country = "GB"
+
+[[source.ytmusic.charts]]
+name = "Russian"
+country = "RU"
+
+[[source.ytmusic.charts]]
+name = "Estonian"
+country = "EE"
 
 # Controls. Key names are pygame names ("left ctrl", "return", "a", "1"...).
 # The defaults match MAME's player-1 layout, which most keyboard encoders

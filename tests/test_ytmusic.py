@@ -56,8 +56,10 @@ class FakeYT:
 
     def get_charts(self, country):
         self._check("charts")
-        return {"videos": [{"title": "Top 100", "playlistId": "PLtop"}], "artists": [
-            {"title": "Artist X", "browseId": "UCx"}]}
+        self.chart_requests = getattr(self, "chart_requests", []) + [country]
+        return {"videos": [{"title": f"Trending 20 {country}", "playlistId": "PLtrend"},
+                           {"title": f"Top 100 Music Videos {country}", "playlistId": "PLtop"}],
+                "artists": [{"title": "Artist X", "browseId": "UCx"}]}
 
     def get_watch_playlist(self, videoId, limit=25):
         return {"tracks": [dict(SONG, videoId=videoId), dict(SONG, videoId="r2", title="Next")]}
@@ -110,7 +112,10 @@ def test_search_all_broken_raises():
 def test_home_has_menu_and_shelves():
     shelves = src().home()
     assert shelves[0].title == "Browse"
-    assert [c.ref for c in shelves[0].items] == ["charts", "genres"]
+    menu = shelves[0].items
+    assert [(c.kind, c.title, c.ref) for c in menu] == [
+        ("chart", "UK Charts", "GB"), ("chart", "Russian Charts", "RU"),
+        ("chart", "Estonian Charts", "EE"), ("menu", "Genres", "genres")]
     assert shelves[1].title == "Hits" and len(shelves[1].items) == 2
     assert len(shelves) == 2  # empty shelf dropped
 
@@ -128,8 +133,6 @@ def test_expand_variants():
     assert album[0].album == "Discovery" and album[0].art_url.endswith("w300-h300")
     artist = s.expand(Collection("artist", "Daft Punk", "UCdp"))
     assert isinstance(artist[0], Track) and artist[-1].kind == "album"
-    charts = s.expand(Collection("menu", "Charts", "charts"))
-    assert [c.kind for c in charts] == ["playlist", "artist"]
     genres = s.expand(Collection("menu", "Genres", "genres"))
     assert genres[0].kind == "genre"
     assert s.expand(genres[0])[0].kind == "playlist"
@@ -148,3 +151,29 @@ def test_radio_excludes_seed():
 
 def test_playable_url():
     assert src().playable_url(Track("abc", "t")) == "https://music.youtube.com/watch?v=abc"
+
+
+def test_chart_tab_opens_top_100_songs_then_other_lists():
+    s = src()
+    items = s.expand(Collection("chart", "Estonian Charts", "EE"))
+    assert s.yt.chart_requests == ["EE"]
+    assert isinstance(items[0], Track)  # Top 100 songs come first
+    rest = [(i.kind, i.title) for i in items if isinstance(i, Collection)]
+    assert rest == [("playlist", "Trending 20 EE"), ("artist", "Artist X")]
+
+
+def test_custom_chart_list():
+    shelves = src(charts=[{"name": "US", "country": "us"}]).home()
+    assert [c.ref for c in shelves[0].items if c.kind == "chart"] == ["US"]
+
+
+def test_house_music_comes_from_first_chart():
+    s = src()
+    tracks = s.house_music()
+    assert s.yt.chart_requests == ["GB"]
+    assert tracks and all(isinstance(t, Track) for t in tracks)
+
+
+def test_house_music_falls_back_when_charts_broken():
+    tracks = src(broken={"charts"}).house_music()
+    assert [t.id for t in tracks] == ["p1"]  # first home playlist

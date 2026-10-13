@@ -159,3 +159,27 @@ def test_errors_back_off():
     eng.tick()
     assert len(eng.up_next) == remaining
     assert eng.now_playing is None
+
+
+def test_autoplay_uses_house_music_not_radio_by_default():
+    eng, _, clock = make(autoplay_delay=0)
+    calls = []
+    eng.source.radio = lambda t, limit=25: calls.append(t) or [_track(99)]
+    eng.request(_track(1))
+    eng.tick()
+    clock.t += 101  # song ends
+    eng.tick()
+    eng.tick()
+    assert not calls
+    assert eng.now_playing and not eng.now_playing.requested
+
+
+def test_autoplay_radio_option_follows_last_song():
+    eng, _, clock = make(autoplay_delay=0, autoplay_radio=True)
+    eng.source.radio = lambda t, limit=25: [_track(99)]
+    eng.request(_track(1))
+    eng.tick()
+    clock.t += 101
+    eng.tick()
+    eng.tick()
+    assert eng.now_playing.track == _track(99)

@@ -38,6 +38,7 @@ DEFAULTS: dict = {
         "autoplay": True,
         "autoplay_delay": 3,
         "autoplay_seed": "",
+        "autoplay_radio": False,
         "interrupt_autoplay": True,
     },
     "source": {
@@ -45,8 +46,12 @@ DEFAULTS: dict = {
         "ytmusic": {
             "auth_file": "",
             "language": "en",
-            "location": "",
-            "chart_country": "ZZ",
+            "location": "GB",  # region for the home feed and search results
+            "charts": [
+                {"name": "UK", "country": "GB"},
+                {"name": "Russian", "country": "RU"},
+                {"name": "Estonian", "country": "EE"},
+            ],
             "allow_explicit": True,
         },
     },

@@ -26,6 +26,21 @@ DEFAULT_GENRES = [
     "Classical", "Soundtracks", "Video Game Music", "Chill",
 ]
 
+# Each entry becomes its own "<name> Charts" tab on the home screen.
+# The first one also supplies the house music played when the queue is empty.
+DEFAULT_CHARTS = [
+    {"name": "UK", "country": "GB"},
+    {"name": "Russian", "country": "RU"},
+    {"name": "Estonian", "country": "EE"},
+]
+
+_COUNTRY_NAMES = {"GB": "the UK", "US": "the US", "RU": "Russia", "EE": "Estonia", "ZZ": "the world",
+                  "DE": "Germany", "FR": "France", "FI": "Finland", "LV": "Latvia", "LT": "Lithuania",
+                  "UA": "Ukraine", "IE": "Ireland", "ES": "Spain", "IT": "Italy", "SE": "Sweden"}
+
+# Order in which a country's chart playlists are preferred as its "Top" list.
+_CHART_PREFERENCE = ("Top 100 Music Videos", "Daily Top Music Videos", "Trending 20")
+
 
 def _best_thumb(thumbs: Any, size: int = 300) -> str | None:
     if not thumbs or not isinstance(thumbs, list):
@@ -69,8 +84,8 @@ class YouTubeMusicSource(Source):
         self,
         auth_file: str | None = None,
         language: str = "en",
-        location: str = "",
-        chart_country: str = "ZZ",
+        location: str = "GB",
+        charts: list[dict] | None = None,
         allow_explicit: bool = True,
         genres: list[str] | None = None,
         client: Any = None,
@@ -81,7 +96,7 @@ class YouTubeMusicSource(Source):
             client = YTMusic(auth_file or None, language=language, location=location)
         self.yt = client
         self.authenticated = bool(auth_file)
-        self.chart_country = chart_country
+        self.charts = [c for c in (charts if charts is not None else DEFAULT_CHARTS) if c.get("country")]
         self.allow_explicit = allow_explicit
         self.genres = genres or DEFAULT_GENRES
 
@@ -162,9 +177,12 @@ class YouTubeMusicSource(Source):
 
     def home(self) -> list[Shelf]:
         menu = [
-            Collection("menu", "Charts", "charts", subtitle="What's hot right now", source=self.name),
-            Collection("menu", "Genres", "genres", subtitle="Browse by style", source=self.name),
+            Collection("chart", f"{c.get('name') or c['country']} Charts", c["country"].upper(),
+                       subtitle=f"Top 100 right now in {_COUNTRY_NAMES.get(c['country'].upper(), c['country'])}",
+                       source=self.name)
+            for c in self.charts
         ]
+        menu.append(Collection("menu", "Genres", "genres", subtitle="Browse by style", source=self.name))
         if self.authenticated:
             menu.append(Collection("menu", "Your Library", "library",
                                    subtitle="Your saved playlists", source=self.name))
@@ -198,6 +216,8 @@ class YouTubeMusicSource(Source):
     def expand(self, c: Collection) -> list[Item]:
         if c.kind == "menu":
             return self._expand_menu(c.ref)
+        if c.kind == "chart":
+            return self._expand_chart(c.ref)
         if c.kind == "genre":
             # A bare genre name tends to surface regional playlists first;
             # "<genre> essentials" reliably finds YouTube Music's curated ones.
@@ -234,24 +254,42 @@ class YouTubeMusicSource(Source):
     def _expand_menu(self, ref: str) -> list[Item]:
         if ref == "genres":
             return [Collection("genre", g, g, subtitle="Genre", source=self.name) for g in self.genres]
-        if ref == "charts":
-            data = self._safe("charts", self.yt.get_charts, self.chart_country) or {}
-            items: list[Item] = []
-            for row in data.get("videos") or []:
-                col = self._collection(row)
-                if col:
-                    items.append(col)
-            for row in (data.get("artists") or [])[:20]:
-                col = self._collection(dict(row, resultType="artist"))
-                if col:
-                    items.append(col)
-            if not items:
-                raise SourceError("Charts are unavailable right now")
-            return items
         if ref == "library":
             rows = self._safe("library", self.yt.get_library_playlists, limit=100) or []
             return [i for i in (self._collection(r) for r in rows) if i]
         raise SourceError(f"Unknown menu {ref}")
+
+    def _expand_chart(self, country: str) -> list[Item]:
+        """A country's chart: its Top 100 songs first, then the other chart
+        playlists and the country's top artists."""
+        data = self._safe("charts", self.yt.get_charts, country) or {}
+        playlists = [c for c in (self._collection(r) for r in data.get("videos") or []) if c]
+        if not playlists:
+            raise SourceError("Charts are unavailable right now")
+
+        def rank(c: Collection) -> int:
+            for i, prefix in enumerate(_CHART_PREFERENCE):
+                if c.title.startswith(prefix):
+                    return i
+            return len(_CHART_PREFERENCE)
+
+        playlists.sort(key=rank)
+        top, others = playlists[0], playlists[1:]
+        items: list[Item] = list(self.expand(top))
+        items.extend(others)
+        for row in (data.get("artists") or [])[:20]:
+            col = self._collection(dict(row, resultType="artist"))
+            if col:
+                items.append(col)
+        return items
+
+    def house_music(self) -> list[Track]:
+        if self.charts:
+            try:
+                return [i for i in self._expand_chart(self.charts[0]["country"]) if isinstance(i, Track)]
+            except SourceError:
+                pass
+        return super().house_music()
 
     def radio(self, track: Track, limit: int = 25) -> list[Track]:
         data = self._safe("radio", self.yt.get_watch_playlist, videoId=track.id, limit=limit)

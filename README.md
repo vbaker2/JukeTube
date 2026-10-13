@@ -3,12 +3,13 @@
 A fullscreen, joystick-driven jukebox for arcade cabinets. It streams from
 **YouTube Music** today; providers are pluggable so others can be added later.
 
-- Browse YouTube Music home shelves, global/country **charts**, **genres**, or
-  **search** with an on-screen arcade keyboard (or a real keyboard).
+- **Chart tabs** for the UK, Russia and Estonia (configurable), each opening on
+  that country's Top 100. You can also browse **genres** and YouTube Music's home shelves (UK
+  region by default), or **search** with an on-screen arcade keyboard (or a real keyboard).
 - Pick songs into a request queue; queue a whole playlist/album with one button.
 - **Credits**: free play, or coin-op mode where the COIN button buys songs.
-- **House music**: when nobody's picked anything, it autoplays radio based on
-  the last song. A paid request cuts in straight away.
+- **House music**: when nobody's picked anything, it plays shuffled songs from
+  the UK Top 100 (or follow-on "radio" if you turn that on). A paid request cuts in straight away.
 - **Attract mode**: after 45s without input it shows a big now-playing screen
   with the album art, and the first button press wakes it.
 - MAME-style default key mapping, so it works with I-PAC-style keyboard encoders out
@@ -96,8 +97,12 @@ songs_per_credit = 3     # 3 songs per coin
 allow_skip = false       # no skipping paid songs
 
 [source.ytmusic]
-chart_country = "GB"     # local charts instead of global
+location = "US"          # region for home feed and search
 allow_explicit = false
+
+[[source.ytmusic.charts]] # chart tabs, in order; replaces the default UK/RU/EE set
+name = "US"
+country = "US"
 
 [display]
 theme = "classic"        # warm Wurlitzer colours instead of neon

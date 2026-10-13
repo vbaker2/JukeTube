@@ -33,6 +33,7 @@ class EngineConfig:
     autoplay: bool = True  # play radio/house music when nobody has paid
     autoplay_delay: float = 3.0  # seconds of silence before autoplay kicks in
     autoplay_seed: str = ""  # optional playlist id for house music
+    autoplay_radio: bool = False  # True: follow on with songs like the last one played
     interrupt_autoplay: bool = True  # a paid request cuts off house music
     history_size: int = 200
 
@@ -219,22 +220,15 @@ class Jukebox:
         self._radio_future = self._submit(self._load_radio, seed)
 
     def _load_radio(self, seed: Track | None) -> list[Track]:
-        if seed is not None:
+        if seed is not None and self.cfg.autoplay_radio:
             tracks = self.source.radio(seed)
             if tracks:
                 return tracks
         if self.cfg.autoplay_seed:
             items = self.source.expand(Collection("playlist", "House", self.cfg.autoplay_seed))
+            tracks = [i for i in items if isinstance(i, Track)]
         else:
-            items = []
-            for shelf in self.source.home():
-                for item in shelf.items:
-                    if isinstance(item, Collection) and item.kind == "playlist":
-                        items = self.source.expand(item)
-                        break
-                if items:
-                    break
-        tracks = [i for i in items if isinstance(i, Track)]
+            tracks = self.source.house_music()
         random.shuffle(tracks)
         return tracks
 
