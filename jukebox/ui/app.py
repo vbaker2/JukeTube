@@ -466,8 +466,11 @@ class App:
             self._record_completed_play(self.engine.completed.popleft())
         while self.engine.messages:
             self.toast(self.engine.messages.popleft())
-        while self._pending_queue:
-            fut = self._pending_queue.pop(0)
+        pending, self._pending_queue = self._pending_queue, []
+        for fut in pending:
+            if not fut.done():
+                self._pending_queue.append(fut)
+                continue
             try:
                 tracks = [i for i in fut.result() if isinstance(i, Track)]
                 self.engine.request_many(tracks)

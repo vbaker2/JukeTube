@@ -1,5 +1,6 @@
 import copy
 import json
+from concurrent.futures import Future
 
 from jukebox.config import DEFAULTS
 from jukebox.inputs import Action
@@ -64,5 +65,17 @@ def test_selecting_playlist_offers_queue_whole_or_browse(tmp_path):
         assert [row.title for row in choice.rows] == ["Queue whole playlist", "Browse songs"]
         choice.activate(choice.rows[1])
         assert isinstance(app.stack[-1], ListScreen)
+    finally:
+        app.shutdown()
+
+
+def test_pending_playlist_request_does_not_block_ui_update(tmp_path):
+    app = make_app(tmp_path)
+    try:
+        app.push(HomeScreen(app))
+        pending = Future()
+        app._pending_queue.append(pending)
+        app.update()
+        assert app._pending_queue == [pending]
     finally:
         app.shutdown()
