@@ -87,7 +87,11 @@ class UpdateAgent:
                                 capture_output=True, text=True, check=True).stdout.strip()
         if actual != commit:
             raise RuntimeError("GitHub branch changed while staging; retrying next poll")
+        test_env = os.environ.copy()
+        test_env["SDL_VIDEODRIVER"] = "dummy"
+        test_env["SDL_AUDIODRIVER"] = "dummy"
         test = subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=self.stage,
+                              env=test_env,
                               capture_output=True, text=True, timeout=900)
         if test.returncode:
             log.error("Update %s failed cabinet tests:\n%s\n%s", commit[:12],
