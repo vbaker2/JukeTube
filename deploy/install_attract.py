@@ -31,6 +31,7 @@ launcher = project / "cabinet-launch.sh"
 write(launcher, '''#!/bin/sh
 cd /home/mame/jukebox || exit 1
 export PATH="/home/mame/.local/bin:/home/mame/jukebox/.venv/bin:$PATH"
+export JUKEBOX_AUTO_UPDATE=1
 mkdir -p /home/mame/.local/state/jukebox
 exec .venv/bin/python -m jukebox >>/home/mame/.local/state/jukebox/app.log 2>&1
 ''')

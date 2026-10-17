@@ -240,6 +240,11 @@ Keep these files private: they give access to your Google account.
 - Set `audio_device` if sound goes to the wrong output (`mpv --audio-device=help`
   lists them).
 
+On the Lenovo cabinet, the Attract-Mode launcher checks the GitHub `master`
+branch every five minutes, runs the test suite on a staged release, and applies
+it after the current song and requested queue finish. It announces “Updating
+software” first, then restarts JukeTube in place without stopping Attract-Mode.
+
 ## Keeping it working
 
 YouTube changes things often, and the two unofficial libraries this relies on

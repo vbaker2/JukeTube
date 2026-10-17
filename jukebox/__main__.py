@@ -105,6 +105,8 @@ def main(argv: list[str] | None = None) -> int:
               screenshot=args.screenshot, max_frames=args.frames)
     app.run()
     pygame.quit()
+    if os.environ.pop("JUKEBOX_UPDATE_RESTART", None) == "1":
+        os.execv(sys.executable, [sys.executable, "-m", "jukebox", *sys.argv[1:]])
     return 0
 
 

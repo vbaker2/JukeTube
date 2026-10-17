@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 import json
 import math
+import os
 import tempfile
 import time
 from pathlib import Path
@@ -20,6 +21,7 @@ from ..inputs import Action, InputMapper
 from ..models import Collection, Track, format_duration
 from ..player import Player
 from ..sources import Source, create_source
+from ..updater import UpdateAgent
 from .art import ArtCache
 from .controls import draw_labelled_layout
 from .screens import ConfigScreen, HomeScreen, ListScreen, Screen, SearchScreen
@@ -62,6 +64,11 @@ class App:
         self.player = player
         self._pool = ThreadPoolExecutor(4, thread_name_prefix="net")
         self.engine = Jukebox(source, player, EngineConfig(**cfg["jukebox"]), submit=self.submit)
+        self.updater = None
+        if os.environ.get("JUKEBOX_AUTO_UPDATE") == "1":
+            self.updater = UpdateAgent(Path(__file__).resolve().parents[2],
+                                       Path.home() / ".local/state/jukebox")
+            self.updater.start()
         self.theme = Theme(disp.get("theme", "neon"))
         self.art = ArtCache(cache_dir)
         self._play_stats_path = Path(cfg.get("_path", default_config_path())).with_name("play-stats.json")
@@ -397,6 +404,8 @@ class App:
             self.shutdown()
 
     def shutdown(self) -> None:
+        if self.updater:
+            self.updater.stop()
         self.player.shutdown()
         self.art.shutdown()
         self._pool.shutdown(wait=False, cancel_futures=True)
@@ -449,7 +458,9 @@ class App:
             eng.toggle_pause()
 
     def update(self) -> None:
-        self.engine.tick()
+        self.engine.tick(before_start=self.updater.hold_at_boundary if self.updater else None)
+        if os.environ.get("JUKEBOX_UPDATE_RESTART") == "1":
+            self.running = False
         while self.engine.completed:
             self._record_completed_play(self.engine.completed.popleft())
         while self.engine.messages:

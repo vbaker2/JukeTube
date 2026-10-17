@@ -184,3 +184,18 @@ def test_autoplay_radio_option_follows_last_song():
     eng.tick()
     eng.tick()
     assert eng.now_playing.track == _track(99)
+
+
+def test_boundary_hook_holds_autoplay_until_update_can_restart():
+    eng, _, _ = make(autoplay_delay=0)
+    assert eng.tick(before_start=lambda: True) is None
+    assert eng.now_playing is None
+
+
+def test_boundary_hook_waits_for_queued_requests():
+    eng, _, _ = make(autoplay=False)
+    eng.request(_track(1))
+    called = []
+    eng.tick(before_start=lambda: called.append(True) or True)
+    assert not called
+    assert eng.now_playing and eng.now_playing.track == _track(1)
