@@ -130,7 +130,8 @@ def test_home_has_menu_and_shelves():
     menu = shelves[0].items
     assert [(c.kind, c.title, c.ref) for c in menu] == [
         ("chart", "UK Charts", "GB"), ("chart", "Russian Charts", "RU"),
-        ("chart", "Estonian Charts", "EE"), ("menu", "Genres", "genres")]
+        ("chart", "Estonian Charts", "EE"), ("menu", "Genres", "genres"),
+        ("menu", "Artists", "artists")]
     assert shelves[1].title == "Hits" and len(shelves[1].items) == 2
     assert len(shelves) == 2  # empty shelf dropped
 
@@ -150,6 +151,11 @@ def test_expand_variants():
     assert isinstance(artist[0], Track) and artist[-1].kind == "album"
     genres = s.expand(Collection("menu", "Genres", "genres"))
     assert genres[0].kind == "genre"
+    artists = s.expand(Collection("menu", "Artists", "artists"))
+    assert [a.title for a in artists] == ["Back Street Boys", "The Prodigy", "Knife Party",
+                                         "Swedish House Mafia"]
+    assert artists[0].kind == "artist"
+    assert s.expand(artists[0])[0].title == "Get Lucky"
 
 
 def test_expand_broken_playlist_raises_friendly_error():

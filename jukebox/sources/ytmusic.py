@@ -79,6 +79,8 @@ DEFAULT_GENRES = [
      "query": "classical essentials", "match": ["classical", "symphon", "orchestra", "opera"]},
 ]
 
+DEFAULT_ARTISTS = ["Back Street Boys", "The Prodigy", "Knife Party", "Swedish House Mafia"]
+
 # Playlists whose titles contain any of these are dropped from genre lists:
 # keeps the browse menus British/European rather than US or other regions.
 DEFAULT_GENRE_EXCLUDE = [
@@ -250,6 +252,7 @@ class YouTubeMusicSource(Source):
             for c in self.charts
         ]
         menu.append(Collection("menu", "Genres", "genres", subtitle="Browse by style", source=self.name))
+        menu.append(Collection("menu", "Artists", "artists", subtitle="Your favourite artists", source=self.name))
         if self.authenticated:
             menu.append(Collection("menu", "Your Library", "library",
                                    subtitle="Your saved playlists", source=self.name))
@@ -300,7 +303,20 @@ class YouTubeMusicSource(Source):
             art = _best_thumb(data.get("thumbnails")) or c.art_url
             return self._tracks(data.get("tracks"), album=data.get("title", ""), art_url=art)
         if c.kind == "artist":
-            data = self._safe("artist", self.yt.get_artist, c.ref)
+            artist_ref = c.ref
+            if artist_ref.startswith("search:"):
+                rows = self._safe("artist search", self.yt.search, artist_ref[7:],
+                                  filter="artists", limit=5) or []
+                match = None
+                for row in rows:
+                    candidate = self._collection(row)
+                    if candidate and candidate.kind == "artist":
+                        match = candidate
+                        break
+                if not match:
+                    raise SourceError(f"Couldn't find artist {c.title}")
+                artist_ref = match.ref
+            data = self._safe("artist", self.yt.get_artist, artist_ref)
             if data is None:
                 raise SourceError(f"Couldn't open artist {c.title}")
             items: list[Item] = list(self._tracks((data.get("songs") or {}).get("results")))
@@ -317,6 +333,9 @@ class YouTubeMusicSource(Source):
         if ref == "genres":
             return [Collection("genre", g["name"], g["name"], subtitle=g.get("about") or "Genre",
                                source=self.name) for g in self.genres]
+        if ref == "artists":
+            return [Collection("artist", name, f"search:{name}", subtitle="Artist",
+                               source=self.name) for name in DEFAULT_ARTISTS]
         if ref == "library":
             rows = self._safe("library", self.yt.get_library_playlists, limit=100) or []
             return [i for i in (self._collection(r) for r in rows) if i]

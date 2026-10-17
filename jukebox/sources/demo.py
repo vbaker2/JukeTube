@@ -24,7 +24,8 @@ class DemoSource(Source):
 
     def home(self) -> list[Shelf]:
         return [
-            Shelf("Browse", [Collection("menu", "Genres", "genres", "Browse by style", source=self.name)]),
+            Shelf("Browse", [Collection("menu", "Genres", "genres", "Browse by style", source=self.name),
+                             Collection("menu", "Artists", "artists", "Favourite artists", source=self.name)]),
             Shelf("Arcade Classics", [Collection("playlist", f"Mixtape #{n}", f"mix{n}",
                                                  "Playlist · 12 songs", source=self.name)
                                       for n in range(1, 6)]),
@@ -36,6 +37,9 @@ class DemoSource(Source):
         return hits[:30]
 
     def expand(self, c: Collection) -> list[Item]:
+        if c.ref == "artists":
+            return [Collection("artist", name, f"demo-artist:{name}", "Artist", source=self.name)
+                    for name in ("Back Street Boys", "The Prodigy", "Knife Party", "Swedish House Mafia")]
         if c.ref == "genres":
             return [Collection("genre", g, g, "Genre", source=self.name)
                     for g in ("Synthwave", "Chiptune", "Funk", "Rock")]
