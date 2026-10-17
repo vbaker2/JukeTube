@@ -16,7 +16,7 @@ DEFAULTS: dict = {
         "height": 720,
         "fps": 60,
         "hide_cursor": True,
-        "title": "JUKEBOX",
+        "title": "JukeTube",
         "attract_after": 45,  # seconds idle before the big now-playing screen
         "theme": "neon",
     },
@@ -39,7 +39,7 @@ DEFAULTS: dict = {
         "max_queue": 50,
         "max_per_track_in_queue": 1,
         "allow_skip": True,
-        "autoplay": True,
+        "autoplay": False,
         "autoplay_delay": 3,
         "autoplay_seed": "",
         "autoplay_radio": False,
@@ -49,6 +49,7 @@ DEFAULTS: dict = {
         "name": "ytmusic",
         "ytmusic": {
             "auth_file": "",
+            "profiles": [],
             "language": "en",
             "location": "GB",  # region for the home feed and search results
             "charts": [
@@ -60,6 +61,7 @@ DEFAULTS: dict = {
         },
     },
     "controls": {
+        "exit_hold_seconds": 1.0,  # hold Coin + Start on either panel to quit
         "keyboard": {
             "up": ["up"],
             "down": ["down"],

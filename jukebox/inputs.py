@@ -28,9 +28,11 @@ class Action(enum.Enum):
     PAUSE = "pause"
     START = "start"
     COIN = "coin"
+    PROFILE_NEXT = "profile_next"
     VOLUME_UP = "volume_up"
     VOLUME_DOWN = "volume_down"
     EXIT = "exit"
+    QUIT = "quit"  # deliberate held cabinet gesture; no confirmation needed
 
 
 DIRECTIONS = (Action.UP, Action.DOWN, Action.LEFT, Action.RIGHT)
@@ -60,6 +62,12 @@ class InputMapper:
                 continue
             for b in buttons if isinstance(buttons, list) else [buttons]:
                 self.buttons[int(b)] = action
+        # Optional per-encoder overrides are installed from cabinet calibration.
+        self.device_buttons: dict[tuple[int, int], Action] = {}
+        # Calibrated button chords (device, sorted button pair) -> action.
+        self.device_chords: dict[tuple[int, tuple[int, int]], Action] = {}
+        self._chord_pending: dict[tuple[int, int], float] = {}
+        self._chord_used: set[tuple[int, int]] = set()
         # held action -> (source id, next repeat time)
         self._held: dict[tuple, float] = {}
         self._axis_state: dict[tuple, Action | None] = {}
@@ -67,6 +75,26 @@ class InputMapper:
         self.joysticks: dict[int, pygame.joystick.JoystickType] = {}
         self.text_input: list[str] = []  # typed characters for search
         self.typing = False
+        self.exit_hold = float(controls.get("exit_hold_seconds", 1.0))
+        self._cabinet_buttons: dict[int, set[int]] = {}
+        self._exit_started: dict[int, float] = {}
+        self._exit_used: set[int] = set()
+
+    def set_device_button_action(self, instance_id: int, button: int, action: Action) -> None:
+        self.device_buttons[(int(instance_id), int(button))] = action
+
+    def set_device_chord(self, instance_id: int, buttons: tuple[int, int], action: Action) -> None:
+        pair = tuple(sorted((int(buttons[0]), int(buttons[1]))))
+        self.device_chords[(int(instance_id), pair)] = action
+
+    def button_action(self, instance_id: int, button: int) -> Action | None:
+        return self.device_buttons.get((instance_id, button), self.buttons.get(button))
+
+    @staticmethod
+    def _exit_role(action: Action | None) -> Action | None:
+        # The right-hand coin button changes profiles on a tap, but still
+        # counts as Coin when held together with Start for the quit gesture.
+        return Action.COIN if action == Action.PROFILE_NEXT else action
 
     @staticmethod
     def _action(name: str) -> Action | None:
@@ -106,11 +134,65 @@ class InputMapper:
             if self.typing:
                 self.text_input.append(event.text)
         elif et == pygame.JOYBUTTONDOWN:
-            action = self.buttons.get(event.button)
+            action = self.button_action(event.instance_id, event.button)
+            if action in (Action.COIN, Action.START, Action.PROFILE_NEXT):
+                held = self._cabinet_buttons.setdefault(event.instance_id, set())
+                held.add(event.button)
+                actions = {self._exit_role(self.button_action(event.instance_id, b)) for b in held}
+                if actions == {Action.COIN, Action.START}:
+                    self._exit_started.setdefault(event.instance_id, now)
+                return out
+            chord_key = (event.instance_id, event.button)
+            pairs = [((device, pair), mapped) for (device, pair), mapped in self.device_chords.items()
+                     if device == event.instance_id and event.button in pair]
+            if pairs:
+                self._chord_pending[chord_key] = now
+                held = self._cabinet_buttons.setdefault(event.instance_id, set())
+                held.add(event.button)
+                for (device, pair), mapped in pairs:
+                    if set(pair).issubset(held):
+                        self._chord_used.update((device, b) for b in pair)
+                        self._chord_pending.pop((device, pair[0]), None)
+                        self._chord_pending.pop((device, pair[1]), None)
+                        out.append(mapped)
+                        break
+                return out
             if action:
                 self._press(("btn", event.instance_id, event.button), action, now, out)
         elif et == pygame.JOYBUTTONUP:
-            action = self.buttons.get(event.button)
+            action = self.button_action(event.instance_id, event.button)
+            if action in (Action.COIN, Action.START, Action.PROFILE_NEXT):
+                device = event.instance_id
+                held = self._cabinet_buttons.get(device, set())
+                if event.button in held:
+                    # A short chord is cancelled; single taps retain normal behaviour.
+                    chord = device in self._exit_started or device in self._exit_used
+                    if chord:
+                        self._exit_used.add(device)
+                    else:
+                        out.append(action)
+                    held.discard(event.button)
+                    self._exit_started.pop(device, None)
+                    if not held:
+                        self._cabinet_buttons.pop(device, None)
+                        self._exit_used.discard(device)
+                return out
+            chord_key = (event.instance_id, event.button)
+            chord_button = any(device == event.instance_id and event.button in pair
+                               for device, pair in self.device_chords)
+            was_chord = chord_key in self._chord_used
+            self._chord_used.discard(chord_key)
+            self._chord_pending.pop(chord_key, None)
+            held = self._cabinet_buttons.get(event.instance_id, set())
+            held.discard(event.button)
+            if not held:
+                self._cabinet_buttons.pop(event.instance_id, None)
+            if was_chord:
+                return out
+            if chord_button:
+                if action:
+                    out.append(action)
+                return out
             if action:
                 self._release(("btn", event.instance_id, event.button), action)
         elif et == pygame.JOYAXISMOTION and event.axis in (0, 1):
@@ -148,12 +230,23 @@ class InputMapper:
             log.info("Joystick connected: %s (%d buttons)", js.get_name(), js.get_numbuttons())
         elif et == pygame.JOYDEVICEREMOVED:
             self.joysticks.pop(event.instance_id, None)
+            self._cabinet_buttons.pop(event.instance_id, None)
+            self._chord_pending = {k: v for k, v in self._chord_pending.items() if k[0] != event.instance_id}
+            self._chord_used = {k for k in self._chord_used if k[0] != event.instance_id}
+            self._exit_started.pop(event.instance_id, None)
+            self._exit_used.discard(event.instance_id)
+            self._axis_state = {k: v for k, v in self._axis_state.items() if k[0] != event.instance_id}
+            self._hat_state = {k: v for k, v in self._hat_state.items() if k[0] != event.instance_id}
             for held in [h for h in self._held if h[0][0] != "key" and h[0][1] == event.instance_id]:
                 self._held.pop(held, None)
         return out
 
     def repeats(self, now: float) -> list[Action]:
         out = []
+        for device, started in self._exit_started.items():
+            if device not in self._exit_used and now - started >= self.exit_hold:
+                self._exit_used.add(device)
+                out.append(Action.QUIT)
         for key, due in list(self._held.items()):
             if now >= due:
                 out.append(key[1])

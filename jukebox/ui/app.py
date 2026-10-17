@@ -4,19 +4,25 @@
 from __future__ import annotations
 
 import logging
+import json
 import math
+import tempfile
 import time
+from pathlib import Path
 from concurrent.futures import Future, ThreadPoolExecutor
 
 import pygame
 
 from ..engine import EngineConfig, Jukebox
+from ..config import default_config_path
+from ..favourites import Favourites
 from ..inputs import Action, InputMapper
 from ..models import Collection, Track, format_duration
 from ..player import Player
-from ..sources import Source
+from ..sources import Source, create_source
 from .art import ArtCache
-from .screens import HomeScreen, ListScreen, Screen, SearchScreen
+from .controls import draw_labelled_layout
+from .screens import ConfigScreen, HomeScreen, ListScreen, Screen, SearchScreen
 from .theme import Theme, glow_rect, placeholder_art, pulse
 
 log = logging.getLogger(__name__)
@@ -32,20 +38,90 @@ class App:
     def __init__(self, cfg: dict, source: Source, player: Player, cache_dir, player_warning=None,
                  screenshot: str | None = None, max_frames: int | None = None):
         self.cfg = cfg
+        self.profiles = list((cfg.get("source", {}).get("ytmusic") or {}).get("profiles") or [])
+        self.profile_id = cfg.get("_profile_id", "")
+        selected_profile = next((p for p in self.profiles if p.get("id") == self.profile_id), None)
+        self.profile_name = selected_profile.get("name", "YouTube Music") if selected_profile else "YouTube Music"
         disp = cfg["display"]
         self.size = (int(disp["width"]), int(disp["height"]))
         self.fps = int(disp["fps"])
         self.attract_after = float(disp["attract_after"])
         self.volume_step = int(cfg["audio"]["volume_step"])
         self.source = source
+        self._order_path = Path(cfg.get("_path", default_config_path())).with_name("ui-order.json")
+        self.home_order: list[str] = []
+        self.genre_order: list[str] = []
+        try:
+            order = json.loads(self._order_path.read_text(encoding="utf-8"))
+            if isinstance(order, dict):
+                self.home_order = [str(x) for x in order.get("home", []) if isinstance(x, str)]
+                self.genre_order = [str(x) for x in order.get("genres", []) if isinstance(x, str)]
+        except (OSError, ValueError):
+            pass
+        self._apply_genre_order()
         self.player = player
         self._pool = ThreadPoolExecutor(4, thread_name_prefix="net")
         self.engine = Jukebox(source, player, EngineConfig(**cfg["jukebox"]), submit=self.submit)
         self.theme = Theme(disp.get("theme", "neon"))
         self.art = ArtCache(cache_dir)
+        self._play_stats_path = Path(cfg.get("_path", default_config_path())).with_name("play-stats.json")
+        self.play_stats: dict = {"genres": {}, "tracks": {}}
+        self._play_stats_error = False
+        try:
+            saved_stats = json.loads(self._play_stats_path.read_text(encoding="utf-8"))
+            if isinstance(saved_stats, dict):
+                self.play_stats["genres"] = saved_stats.get("genres", {}) if isinstance(
+                    saved_stats.get("genres", {}), dict) else {}
+                self.play_stats["tracks"] = saved_stats.get("tracks", {}) if isinstance(
+                    saved_stats.get("tracks", {}), dict) else {}
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError) as exc:
+            self._play_stats_error = True
+            log.warning("Couldn't read play stats; preserving the file: %s", exc)
+        self.screensaver_started: float | None = None
+        self.home_art_candidates: list[dict] = []
         self.inputs = InputMapper(cfg["controls"])
         self.stack: list[Screen] = []
         self.toasts: list[tuple[str, float]] = []
+        self._controls_path = Path(cfg.get("_path", default_config_path())).with_name("controls-visible.json")
+        self.button_positions = {}
+        self.profile_button = None
+        try:
+            positions_path = self._controls_path.with_name("cabinet-buttons.json")
+            positions = json.loads(positions_path.read_text(encoding="utf-8"))
+            if isinstance(positions, dict):
+                self.button_positions = {p: r for p, r in positions.items()
+                                         if isinstance(r, dict) and isinstance(r.get("button"), int)}
+                right_coin = self.button_positions.get("top_right")
+                if right_coin and isinstance(right_coin.get("instance_id"), int):
+                    self.profile_button = (right_coin["instance_id"], right_coin["button"])
+                    self.inputs.set_device_button_action(*self.profile_button, Action.PROFILE_NEXT)
+                right_buttons = [self.button_positions.get(pos) for pos in
+                                 ("right_upper", "right_middle", "right_lower")]
+                if all(isinstance(item, dict) and isinstance(item.get("instance_id"), int)
+                       and isinstance(item.get("button"), int) for item in right_buttons):
+                    upper, middle, lower = right_buttons
+                    if upper["instance_id"] == middle["instance_id"]:
+                        self.inputs.set_device_chord(upper["instance_id"],
+                                                     (upper["button"], middle["button"]),
+                                                     Action.VOLUME_UP)
+                    if middle["instance_id"] == lower["instance_id"]:
+                        self.inputs.set_device_chord(middle["instance_id"],
+                                                     (middle["button"], lower["button"]),
+                                                     Action.VOLUME_DOWN)
+        except (OSError, ValueError):
+            pass
+        self.controls_visible = True
+        try:
+            saved = json.loads(self._controls_path.read_text(encoding="utf-8"))
+            if isinstance(saved, bool):
+                self.controls_visible = saved
+        except (OSError, ValueError):
+            pass
+        self.favourites = Favourites(Path(cfg.get("_path", default_config_path())).with_name("favourites.json"))
+        if self.favourites.error:
+            self.toast("Couldn't read favourites; saved file has been kept", 8)
         self.last_input = time.monotonic()
         self.attract = False
         self.confirm_exit = False
@@ -60,6 +136,42 @@ class App:
     # ------------------------------------------------------------ helpers
     def submit(self, fn, *args) -> Future:
         return self._pool.submit(fn, *args)
+
+    def _apply_genre_order(self) -> None:
+        genres = getattr(self.source, "genres", None)
+        if not isinstance(genres, list) or not self.genre_order:
+            return
+        order = {name: i for i, name in enumerate(self.genre_order)}
+        genres.sort(key=lambda genre: order.get(genre.get("name", ""), len(order)))
+
+    def save_ui_order(self, kind: str, names: list[str]) -> bool:
+        if kind == "home":
+            self.home_order = list(names)
+        elif kind == "genres":
+            self.genre_order = list(names)
+            self._apply_genre_order()
+        temporary = None
+        try:
+            self._order_path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(mode="w", dir=self._order_path.parent, delete=False,
+                                             encoding="utf-8") as file:
+                temporary = Path(file.name)
+                json.dump({"home": self.home_order, "genres": self.genre_order}, file, indent=2)
+                file.write("\n")
+            temporary.replace(self._order_path)
+        except OSError as exc:
+            log.warning("Couldn't save jukebox menu order: %s", exc)
+            self.toast("Couldn't save this order", 5)
+            return False
+        finally:
+            if temporary:
+                temporary.unlink(missing_ok=True)
+        if kind == "home" and self.stack and isinstance(self.stack[0], HomeScreen):
+            self.stack[0].reload()
+        if kind == "genres" and self.stack and isinstance(self.stack[0], HomeScreen):
+            self.stack[0].reload()
+        self.toast("Order saved")
+        return True
 
     def toast(self, msg: str, seconds: float = 2.8) -> None:
         self.toasts.append((msg, time.monotonic() + seconds))
@@ -87,6 +199,87 @@ class App:
     def request(self, track: Track) -> None:
         self.engine.request(track)
 
+    def set_profile(self, profile: dict) -> bool:
+        if profile.get("id") == self.profile_id:
+            self.toast(f"Already browsing as {self.profile_name}")
+            return True
+        source_cfg = self.cfg["source"].get("ytmusic") or {}
+        options = {key: value for key, value in source_cfg.items()
+                   if key != "profiles" and value != ""}
+        auth_file = profile.get("auth_file", options.get("auth_file", ""))
+        options["auth_file"] = str(Path(auth_file).expanduser()) if auth_file else ""
+        if profile.get("user"):
+            options["user"] = str(profile["user"])
+        try:
+            source = create_source(self.cfg["source"]["name"], options)
+        except Exception as exc:
+            self.toast(f"Couldn't open {profile.get('name', 'profile')}: {exc}", 6)
+            return False
+        self.source = self.engine.source = source
+        self._apply_genre_order()
+        self.profile_id = str(profile.get("id", ""))
+        self.profile_name = str(profile.get("name", "YouTube Music"))
+        self.cfg["_profile_id"] = self.profile_id
+        path = Path(self.cfg.get("_path", default_config_path())).with_name("profile.json")
+        temporary = None
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False,
+                                             encoding="utf-8") as file:
+                temporary = Path(file.name)
+                json.dump({"id": self.profile_id}, file)
+            temporary.replace(path)
+        except OSError as exc:
+            log.warning("Couldn't persist selected profile: %s", exc)
+            self.toast("Profile switched; couldn't save it for next time", 5)
+        finally:
+            if temporary:
+                temporary.unlink(missing_ok=True)
+        if self.stack and isinstance(self.stack[0], HomeScreen):
+            self.stack[0].reload()
+        self.toast(f"Browsing as {self.profile_name}")
+        return True
+
+    def next_profile(self) -> None:
+        if not self.profiles:
+            self.toast("No profiles configured yet")
+            return
+        current = next((i for i, profile in enumerate(self.profiles)
+                        if profile.get("id") == self.profile_id), -1)
+        self.set_profile(self.profiles[(current + 1) % len(self.profiles)])
+
+    def toggle_controls(self) -> None:
+        visible = not self.controls_visible
+        temporary = None
+        try:
+            self._controls_path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(mode="w", dir=self._controls_path.parent,
+                                             delete=False, encoding="utf-8") as file:
+                temporary = Path(file.name)
+                json.dump(visible, file)
+            temporary.replace(self._controls_path)
+        except OSError:
+            self.toast("Couldn't save the controls display preference")
+            return
+        finally:
+            if temporary:
+                temporary.unlink(missing_ok=True)
+        self.controls_visible = visible
+        self.toast("Controls shown" if visible else "Controls hidden — use the home menu to show them")
+
+    def toggle_favourite(self, track: Track) -> None:
+        try:
+            added = self.favourites.toggle(track)
+        except OSError as exc:
+            log.warning("Couldn't save favourites: %s", exc)
+            self.toast("Couldn't save favourites; check the file and permissions", 6)
+            return
+        self.toast("Added to favourites" if added else "Removed from favourites")
+
+    def change_volume(self, delta: int) -> None:
+        volume = self.engine.change_volume(delta)
+        self.toast(f"Volume {volume}", 1.8)
+
     def queue_collection(self, c: Collection) -> None:
         self.toast(f"Fetching {c.title}…")
         fut = self.submit(self.source.expand, c)
@@ -96,14 +289,78 @@ class App:
 
         fut.add_done_callback(done)
 
+    def queue_popular_dance(self) -> None:
+        self.toast("Finding popular dance tracks…")
+        fut = self.submit(self.source.popular_dance)
+        fut.add_done_callback(lambda completed: self._pending_queue.append(completed))
+
+    def _record_completed_play(self, track: Track) -> None:
+        """Persist completed plays for the idle cover gallery and genre ranking."""
+        if self._play_stats_error:
+            return
+        tracks = self.play_stats["tracks"]
+        record = tracks.setdefault(track.key, {
+            "id": track.id, "title": track.title, "artist": track.artist,
+            "album": track.album, "art_url": track.art_url, "source": track.source,
+            "genre": track.genre, "plays": 0,
+        })
+        record.update({"title": track.title, "artist": track.artist, "album": track.album,
+                       "art_url": track.art_url or record.get("art_url"),
+                       "genre": track.genre or record.get("genre", "")})
+        record["plays"] = int(record.get("plays", 0)) + 1
+        if track.genre:
+            genres = self.play_stats["genres"]
+            genres[track.genre] = int(genres.get(track.genre, 0)) + 1
+        temporary = None
+        try:
+            self._play_stats_path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(mode="w", dir=self._play_stats_path.parent,
+                                             delete=False, encoding="utf-8") as file:
+                temporary = Path(file.name)
+                json.dump(self.play_stats, file, ensure_ascii=False, indent=2)
+                file.write("\n")
+            temporary.replace(self._play_stats_path)
+        except OSError as exc:
+            log.warning("Couldn't save play stats: %s", exc)
+        finally:
+            if temporary:
+                temporary.unlink(missing_ok=True)
+
+    def _screensaver_items(self) -> list[dict]:
+        tracks = list(self.play_stats.get("tracks", {}).values())
+        tracks.extend({"id": track.id, "title": track.title, "artist": track.artist,
+                       "album": track.album, "art_url": track.art_url, "source": track.source,
+                       "genre": track.genre, "plays": 0}
+                      for track in self.favourites.tracks(self.source.name))
+        tracks.extend(self.home_art_candidates)
+        # Prefer unique covers, while keeping the most-played genres and songs first.
+        genre_counts = self.play_stats.get("genres", {})
+        tracks.sort(key=lambda item: (-int(genre_counts.get(item.get("genre", ""), 0)),
+                                      -int(item.get("plays", 0)), item.get("title", "")))
+        unique: list[dict] = []
+        seen: set[str] = set()
+        for item in tracks:
+            key = item.get("art_url") or f"{item.get('source', '')}:{item.get('id', item.get('title', ''))}"
+            if key and key not in seen:
+                seen.add(key)
+                unique.append(item)
+            if len(unique) >= 16:
+                break
+        return unique
+
     # --------------------------------------------------------------- loop
     def run(self) -> None:
         disp = self.cfg["display"]
-        flags = pygame.SCALED
-        if disp["fullscreen"]:
-            flags |= pygame.FULLSCREEN
-        pygame.display.set_caption(disp.get("title", "Jukebox"))
-        self.screen = pygame.display.set_mode(self.size, flags, vsync=1 if self.fps >= 60 else 0)
+        pygame.display.set_caption("JukeTube by Vince Baker")
+        # SDL's SCALED renderer can enlarge with nearest-neighbour sampling on
+        # the cabinet. Keep a logical canvas and explicitly smooth the final
+        # presentation into the desktop, preserving its aspect ratio.
+        fullscreen = disp["fullscreen"]
+        window = pygame.display.set_mode((0, 0) if fullscreen else self.size,
+                                         pygame.FULLSCREEN if fullscreen else 0)
+        self.screen = pygame.Surface(self.size).convert()
+        viewport = self.screen.get_rect().fit(window.get_rect())
+        frame = pygame.Surface(viewport.size).convert()
         pygame.mouse.set_visible(not disp["hide_cursor"])
         pygame.key.stop_text_input()
         self.push(HomeScreen(self))
@@ -123,6 +380,12 @@ class App:
                     self.dispatch(a)
                 self.update()
                 self.draw(now - start)
+                window.fill((0, 0, 0))
+                if viewport.size == self.size:
+                    window.blit(self.screen, viewport)
+                else:
+                    pygame.transform.smoothscale(self.screen, viewport.size, frame)
+                    window.blit(frame, viewport)
                 pygame.display.flip()
                 frames += 1
                 if self._max_frames and frames >= self._max_frames:
@@ -140,10 +403,14 @@ class App:
 
     def dispatch(self, action: Action) -> None:
         self.last_input = time.monotonic()
+        if action == Action.QUIT:
+            self.running = False
+            return
         eng = self.engine
         if self.attract:
             self.attract = False
-            if action != Action.COIN:
+            if action not in (Action.COIN, Action.PROFILE_NEXT, Action.SKIP,
+                              Action.VOLUME_UP, Action.VOLUME_DOWN):
                 return  # first press just wakes the screen
         if self.confirm_exit:
             if action == Action.SELECT:
@@ -157,24 +424,34 @@ class App:
         if action == Action.EXIT:
             self.confirm_exit = True
             return
+        if action == Action.PROFILE_NEXT:
+            self.next_profile()
+            return
+        # Playback controls must work from every screen, including screens
+        # whose navigation handlers consume otherwise-unrecognised actions.
+        if action == Action.SKIP:
+            if not eng.skip():
+                self.toast("Skipping is disabled" if eng.now_playing else "Nothing playing")
+            return
+        if action == Action.VOLUME_UP:
+            self.toast(f"Volume {eng.change_volume(self.volume_step)}", 1.2)
+            return
+        if action == Action.VOLUME_DOWN:
+            self.toast(f"Volume {eng.change_volume(-self.volume_step)}", 1.2)
+            return
         if self.stack[-1].handle(action):
             return
         if action == Action.BACK:
             self.pop()
         elif action == Action.START:
-            self.open_search()
-        elif action == Action.SKIP:
-            if not eng.skip():
-                self.toast("Skipping is disabled" if eng.now_playing else "Nothing playing")
+            self.push(ConfigScreen(self))
         elif action == Action.PAUSE:
             eng.toggle_pause()
-        elif action == Action.VOLUME_UP:
-            self.toast(f"Volume {eng.change_volume(self.volume_step)}", 1.2)
-        elif action == Action.VOLUME_DOWN:
-            self.toast(f"Volume {eng.change_volume(-self.volume_step)}", 1.2)
 
     def update(self) -> None:
         self.engine.tick()
+        while self.engine.completed:
+            self._record_completed_play(self.engine.completed.popleft())
         while self.engine.messages:
             self.toast(self.engine.messages.popleft())
         while self._pending_queue:
@@ -187,16 +464,32 @@ class App:
         self.stack[-1].update()
         now = time.monotonic()
         self.toasts = [(m, t) for m, t in self.toasts if t > now]
-        if (not self.attract and self.attract_after > 0 and self.engine.now_playing
+        if (not self.attract and self.attract_after > 0
                 and now - self.last_input > self.attract_after):
             self.attract = True
+            self.screensaver_started = now
 
     # --------------------------------------------------------------- draw
     def draw(self, t: float) -> None:
         surf = self.screen
         surf.blit(self.theme.background(self.size), (0, 0))
         if self.attract:
-            self.draw_attract(surf, t)
+            if self.engine.now_playing is None:
+                # The idle screensaver takes over the whole cabinet; controls
+                # return as soon as an input wakes the normal menu.
+                self.draw_attract(surf, t)
+            elif self.controls_visible:
+                preview = pygame.Surface(self.size)
+                preview.blit(self.theme.background(self.size), (0, 0))
+                self.draw_attract(preview, t)
+                width = self.size[0] - PANEL_W - MARGIN * 2
+                height = round(self.size[1] * width / self.size[0])
+                surf.blit(pygame.transform.smoothscale(preview, (width, height)),
+                          (0, (self.size[1] - height) // 2))
+                self.draw_controls(surf, pygame.Rect(self.size[0] - PANEL_W - MARGIN,
+                                                     118, PANEL_W, 436))
+            else:
+                self.draw_attract(surf, t)
         else:
             w, h = self.size
             self.draw_header(surf, t)
@@ -205,7 +498,12 @@ class App:
             self.draw_breadcrumb(surf, content)
             self.stack[-1].draw(surf, content, t)
             panel = pygame.Rect(content.right + MARGIN, HEADER_H + 12, PANEL_W, content.bottom - HEADER_H - 12)
-            self.draw_up_next(surf, panel, t)
+            if self.controls_visible:
+                guide = pygame.Rect(panel.x, panel.y + 130, panel.w, panel.h - 130)
+                self.draw_up_next(surf, pygame.Rect(panel.x, panel.y, panel.w, 118), t)
+                self.draw_controls(surf, guide)
+            else:
+                self.draw_up_next(surf, panel, t)
             self.draw_now_playing(surf, pygame.Rect(MARGIN, h - BAR_H - LEGEND_H - 6, w - MARGIN * 2, BAR_H), t)
             self.draw_legend(surf, pygame.Rect(MARGIN, h - LEGEND_H, w - MARGIN * 2, LEGEND_H))
             self.draw_toasts(surf)
@@ -215,7 +513,7 @@ class App:
     def draw_header(self, surf, t) -> None:
         th, c = self.theme, self.theme.c
         w = self.size[0]
-        title = self.cfg["display"].get("title", "JUKEBOX")
+        title = "JukeTube"
         # Chasing marquee lights.
         for i in range(0, w, 28):
             on = (i // 28 + int(t * 6)) % 3 == 0
@@ -226,6 +524,9 @@ class App:
             g.set_alpha(int(60 + 50 * pulse(t, 0.6)))
             surf.blit(g, (MARGIN + dx, 14 + dy))
         surf.blit(th.text(title, 46, c["text"], title=True), (MARGIN, 14))
+        subtitle_x = MARGIN + th.font(46, title=True).size(title)[0] + 14
+        subtitle = th.font(20, script=True).render("  by Vince Baker", True, c["muted"])
+        surf.blit(subtitle, (subtitle_x, 26))
 
         eng = self.engine
         if eng.free_play:
@@ -240,6 +541,36 @@ class App:
         clock = th.text(time.strftime("%H:%M"), 24, c["muted"], bold=True)
         surf.blit(clock, clock.get_rect(topright=(w - MARGIN - img.get_width() - 30, 25)))
         pygame.draw.line(surf, c["accent2"], (MARGIN, HEADER_H), (w - MARGIN, HEADER_H), 1)
+
+    def draw_controls(self, surf, rect) -> None:
+        th, c = self.theme, self.theme.c
+        canvas = pygame.Surface((360, 344))
+        canvas.fill(c["panel"])
+        pygame.draw.rect(canvas, c["panel_hi"], canvas.get_rect(), 2, border_radius=12)
+        canvas.blit(th.text("CONTROLS", 22, c["accent2"], bold=True), (16, 10))
+        draw_labelled_layout(canvas, pygame.Rect(8, 40, 344, 210), th, self.control_labels())
+        canvas.blit(th.text("↑ ↓ Browse   ← → Page / keyboard", 15, c["muted"]), (16, 254))
+        canvas.blit(th.text("Right group: upper pair VOL +", 14, c["accent2"]), (16, 274))
+        canvas.blit(th.text("lower pair VOL − · single taps unchanged", 14, c["accent2"]), (16, 291))
+        note = "More actions: Playback controls" if self.button_positions else "Button calibration needed"
+        canvas.blit(th.text(note, 14, c["muted"]), (16, 308))
+        seconds = f"{self.inputs.exit_hold:g}"
+        canvas.blit(th.text(f"QUIT: hold Coin + Start {seconds}s", 14, c["warn"]), (16, 325))
+        surf.blit(pygame.transform.smoothscale(canvas, rect.size), rect)
+
+    def control_labels(self) -> dict[str, str]:
+        names = {Action.SELECT: "Select", Action.BACK: "Back", Action.ALT: "Favourite",
+                 Action.START: "Start", Action.COIN: "Coin", Action.PROFILE_NEXT: "Profile",
+                 Action.SKIP: "Skip",
+                 Action.PAUSE: "Pause", Action.VOLUME_DOWN: "Vol −",
+                 Action.VOLUME_UP: "Vol +", Action.EXIT: "Exit"}
+        labels = {position: names.get(self.inputs.button_action(record.get("instance_id", -1),
+                                                                  record["button"]), "Unused")
+                  for position, record in self.button_positions.items()}
+        # Mark physical positions participating in the two global shortcuts,
+        # even before calibration has supplied the encoder button numbers.
+        labels.update({"right_upper": "VOL +", "right_middle": "VOL +/-", "right_lower": "VOL −"})
+        return labels
 
     def draw_breadcrumb(self, surf, content) -> None:
         th, c = self.theme, self.theme.c
@@ -330,7 +661,7 @@ class App:
         th, c = self.theme, self.theme.c
         screen_hint = self.stack[-1].hint
         parts = [screen_hint]
-        for extra in ("BACK back", "START search", "SKIP skip" if self.engine.cfg.allow_skip else "",
+        for extra in ("BACK back", "START settings", "SKIP skip" if self.engine.cfg.allow_skip else "",
                       "COIN credit" if not self.engine.free_play else ""):
             if extra and extra.split()[0] not in screen_hint:
                 parts.append(extra)
@@ -371,41 +702,88 @@ class App:
         th, c = self.theme, self.theme.c
         w, h = self.size
         np, pos, dur = self._np_info()
+        if np is None:
+            self.draw_screensaver(surf, t)
+            return
         size = int(h * 0.55)
         ax, ay = int(w * 0.08), (h - size) // 2 - 20
         bob = int(math.sin(t * 1.2) * 6)
-        art = (self.art.get(np.track.art_url, size) if np else None) or placeholder_art(
-            size, np.track.title if np else "idle", th)
+        art = self.art.get(np.track.art_url, size) or placeholder_art(size, np.track.title, th)
         frame = pygame.Rect(ax, ay + bob, size, size)
         glow_rect(surf, frame, c["accent"], radius=18, spread=24, strength=int(80 + 60 * pulse(t, 0.8)))
         surf.blit(art, frame)
         x = frame.right + 60
         maxw = w - x - 60
-        if np:
-            surf.blit(th.text("NOW PLAYING", 24, c["accent"], bold=True, title=True), (x, ay + 10))
-            surf.blit(th.text(np.track.title, 54, c["text"], bold=True, max_width=maxw), (x, ay + 50))
-            surf.blit(th.text(np.track.artist, 34, c["accent2"], max_width=maxw), (x, ay + 120))
-            if np.track.album:
-                surf.blit(th.text(np.track.album, 24, c["muted"], max_width=maxw), (x, ay + 166))
-            bar = pygame.Rect(x, ay + 220, maxw, 10)
-            pygame.draw.rect(surf, c["panel_hi"], bar, border_radius=5)
-            if dur:
-                pygame.draw.rect(surf, c["accent"], (bar.x, bar.y, int(bar.w * min(1, pos / dur)), bar.h),
-                                 border_radius=5)
-            surf.blit(th.text(f"{format_duration(pos)} / {format_duration(dur)}", 22, c["muted"]),
-                      (x, bar.bottom + 12))
-            _equalizer(surf, x, ay + 290, t, c["accent2"], bars=24, width=maxw, height=80,
-                       active=not self.player.paused)
-            nxt = self.engine.up_next[:3]
-            if nxt:
-                surf.blit(th.text("UP NEXT", 20, c["accent"], bold=True), (x, ay + 400))
-                for i, e in enumerate(nxt):
-                    surf.blit(th.text(f"{e.track.title} — {e.track.artist}", 20, c["text"], max_width=maxw),
-                              (x, ay + 430 + i * 28))
+        surf.blit(th.text("NOW PLAYING", 24, c["accent"], bold=True, title=True), (x, ay + 10))
+        surf.blit(th.text(np.track.title, 54, c["text"], bold=True, max_width=maxw), (x, ay + 50))
+        surf.blit(th.text(np.track.artist, 34, c["accent2"], max_width=maxw), (x, ay + 120))
+        if np.track.album:
+            surf.blit(th.text(np.track.album, 24, c["muted"], max_width=maxw), (x, ay + 166))
+        bar = pygame.Rect(x, ay + 220, maxw, 10)
+        pygame.draw.rect(surf, c["panel_hi"], bar, border_radius=5)
+        if dur:
+            pygame.draw.rect(surf, c["accent"], (bar.x, bar.y, int(bar.w * min(1, pos / dur)), bar.h),
+                             border_radius=5)
+        surf.blit(th.text(f"{format_duration(pos)} / {format_duration(dur)}", 22, c["muted"]),
+                  (x, bar.bottom + 12))
+        _equalizer(surf, x, ay + 290, t, c["accent2"], bars=24, width=maxw, height=80,
+                   active=not self.player.paused)
+        nxt = self.engine.up_next[:3]
+        if nxt:
+            surf.blit(th.text("UP NEXT", 20, c["accent"], bold=True), (x, ay + 400))
+            for i, e in enumerate(nxt):
+                surf.blit(th.text(f"{e.track.title} — {e.track.artist}", 20, c["text"], max_width=maxw),
+                          (x, ay + 430 + i * 28))
         prompt = "INSERT COIN" if not self.engine.can_afford() else "PRESS ANY BUTTON TO PICK A SONG"
         if pulse(t, 1.0) > 0.3:
             img = th.text(prompt, 30, c["warn"], bold=True, title=True)
             surf.blit(img, img.get_rect(midbottom=(w // 2, h - 30)))
+
+    def draw_screensaver(self, surf, t) -> None:
+        """Float a full-screen collage of covers from played genres and songs."""
+        th, c = self.theme, self.theme.c
+        w, h = surf.get_size()
+        items = self._screensaver_items()
+        if not items:
+            logo = th.text("JukeTube", 64, c["text"], title=True)
+            surf.blit(logo, logo.get_rect(center=(w // 2, h // 2)))
+            return
+
+        started = self.screensaver_started or time.monotonic()
+        elapsed = max(0.0, time.monotonic() - started)
+        count = min(10, max(6, len(items)))
+        base_size = min(h, w) * 0.31
+        sizes = [0.95, 0.74, 0.62, 0.86, 0.68, 0.54, 0.78, 0.60, 0.70, 0.50]
+        for i in range(count):
+            item = items[i % len(items)]
+            size = max(96, int(base_size * sizes[i % len(sizes)]))
+            angle = elapsed * 0.20 + i * math.tau / count
+            # Each cover follows its own drifting oval, sweeping across all
+            # four edges instead of sitting in a fixed panel.
+            x = w * 0.5 + math.cos(angle) * w * 0.43
+            y = h * 0.5 + math.sin(angle * 1.23 + i * 0.24) * h * 0.43
+            rect = pygame.Rect(0, 0, size, size)
+            rect.center = (int(x), int(y))
+            cover = self.art.get(item.get("art_url"), size)
+            if cover is None:
+                cover = self._screensaver_placeholder(size, item.get("title", "JukeTube"))
+            # A slow pulse adds a soft dissolve while the whole collage moves.
+            alpha = int(205 + 50 * pulse(elapsed + i * 0.71, 0.18))
+            shadow = rect.inflate(12, 12)
+            pygame.draw.rect(surf, (8, 5, 20), shadow, border_radius=max(8, size // 24))
+            pygame.draw.rect(surf, c["accent"], shadow, 2, border_radius=max(8, size // 24))
+            image = cover.copy()
+            image.set_alpha(alpha)
+            surf.blit(image, rect)
+
+    def _screensaver_placeholder(self, size: int, title: str) -> pygame.Surface:
+        key = (title, size)
+        cache = getattr(self, "_screensaver_placeholder_cache", None)
+        if cache is None:
+            cache = self._screensaver_placeholder_cache = {}
+        if key not in cache:
+            cache[key] = placeholder_art(size, title, self.theme)
+        return cache[key]
 
 
 def _equalizer(surf, x, y, t, color, bars=8, width=70, height=14, active=True) -> None:

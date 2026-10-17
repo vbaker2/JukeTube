@@ -64,6 +64,92 @@ def test_joystick_axis_hat_and_buttons():
     assert m.handle(btn, 0) == [Action.SELECT]
 
 
+def cabinet_button(button, down=True, device=0):
+    return pygame.event.Event(pygame.JOYBUTTONDOWN if down else pygame.JOYBUTTONUP,
+                              instance_id=device, button=button)
+
+
+def test_cabinet_exit_hold_and_single_taps():
+    m = InputMapper(DEFAULTS["controls"])
+    assert m.handle(cabinet_button(8), 0) == []
+    assert m.handle(cabinet_button(8, False), 0.1) == [Action.COIN]
+    assert m.handle(cabinet_button(9), 1) == []
+    assert m.handle(cabinet_button(9, False), 1.1) == [Action.START]
+    m.handle(cabinet_button(8), 2)
+    m.handle(cabinet_button(9), 2.2)
+    assert m.repeats(3.1) == []
+    assert m.repeats(3.21) == [Action.QUIT]
+    assert m.repeats(5) == []
+    assert m.handle(cabinet_button(8, False), 5) == []
+    assert m.handle(cabinet_button(9, False), 5) == []
+    m.handle(cabinet_button(9), 6)
+    assert m.handle(cabinet_button(9, False), 6.1) == [Action.START]
+
+
+def test_cabinet_exit_requires_one_panel_and_cancels_on_release_or_disconnect():
+    m = InputMapper(DEFAULTS["controls"])
+    m.handle(cabinet_button(8, device=0), 0)
+    m.handle(cabinet_button(9, device=1), 0)
+    assert m.repeats(2) == []
+    m.handle(cabinet_button(9, device=0), 2)
+    assert m.handle(cabinet_button(8, False, device=0), 2.1) == []
+    assert m.repeats(4) == []
+    assert m.handle(cabinet_button(9, False, device=0), 4) == []
+    m.handle(cabinet_button(8, device=1), 5)
+    m.handle(pygame.event.Event(pygame.JOYDEVICEREMOVED, instance_id=1), 5.1)
+    assert m.repeats(7) == []
+
+
+def test_right_coin_can_switch_profiles_and_still_quit_with_start():
+    m = InputMapper(DEFAULTS["controls"])
+    m.set_device_button_action(1, 8, Action.PROFILE_NEXT)
+    assert m.handle(cabinet_button(8, device=1), 0) == []
+    assert m.handle(cabinet_button(8, False, device=1), 0.1) == [Action.PROFILE_NEXT]
+    # The override is device-specific; left coin still adds credit.
+    assert m.handle(cabinet_button(8), 1) == []
+    assert m.handle(cabinet_button(8, False), 1.1) == [Action.COIN]
+    # A Coin + Start chord on the right panel remains the keyboard-free quit.
+    m.handle(cabinet_button(8, device=1), 2)
+    m.handle(cabinet_button(9, device=1), 2.1)
+    assert m.repeats(3.01) == []
+    assert m.repeats(3.11) == [Action.QUIT]
+    assert m.handle(cabinet_button(8, False, device=1), 3.2) == []
+    assert m.handle(cabinet_button(9, False, device=1), 3.2) == []
+
+
+def test_calibrated_right_button_chords_change_volume_and_singles_still_work():
+    m = InputMapper(DEFAULTS["controls"])
+    m.set_device_chord(0, (10, 11), Action.VOLUME_UP)
+    m.set_device_chord(0, (11, 12), Action.VOLUME_DOWN)
+    assert m.handle(cabinet_button(10), 0) == []
+    assert m.handle(cabinet_button(11), 0.1) == [Action.VOLUME_UP]
+    assert m.handle(cabinet_button(10, False), 0.2) == []
+    assert m.handle(cabinet_button(11, False), 0.3) == []
+
+    assert m.handle(cabinet_button(11), 1) == []
+    assert m.handle(cabinet_button(11, False), 1.1) == []  # unmapped standalone
+
+    m.set_device_button_action(0, 10, Action.SKIP)
+    assert m.handle(cabinet_button(10), 2) == []
+    assert m.handle(cabinet_button(10, False), 2.1) == [Action.SKIP]
+
+    assert m.handle(cabinet_button(11), 3) == []
+    assert m.handle(cabinet_button(12), 3.1) == [Action.VOLUME_DOWN]
+    assert m.handle(cabinet_button(11, False), 3.2) == []
+    assert m.handle(cabinet_button(12, False), 3.3) == []
+
+
+def test_chord_shortcut_only_fires_once_and_discards_both_single_actions():
+    m = InputMapper(DEFAULTS["controls"])
+    m.set_device_button_action(0, 10, Action.SKIP)
+    m.set_device_button_action(0, 11, Action.PAUSE)
+    m.set_device_chord(0, (10, 11), Action.VOLUME_UP)
+    assert m.handle(cabinet_button(10), 0) == []
+    assert m.handle(cabinet_button(11), 0.1) == [Action.VOLUME_UP]
+    assert m.handle(cabinet_button(10, False), 0.2) == []
+    assert m.handle(cabinet_button(11, False), 0.3) == []
+
+
 def test_config_merge(tmp_path):
     p = tmp_path / "c.toml"
     p.write_text('[jukebox]\nfree_play = false\n[controls.keyboard]\ncoin = ["c"]\n')

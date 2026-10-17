@@ -6,6 +6,7 @@ All methods may block on the network; the UI calls them from worker threads.
 
 from __future__ import annotations
 
+import random
 from abc import ABC, abstractmethod
 
 from ..models import Collection, Item, Shelf, Track
@@ -47,3 +48,9 @@ class Source(ABC):
                 if isinstance(item, Collection) and item.kind == "playlist":
                     return [t for t in self.expand(item) if isinstance(t, Track)]
         return []
+
+    def popular_dance(self, limit: int = 60) -> list[Track]:
+        """Return a shuffled pool for the home-screen Popular Dance shortcut."""
+        tracks = [item for item in self.search("UK popular dance hits") if isinstance(item, Track)]
+        random.shuffle(tracks)
+        return tracks[:max(1, limit)]

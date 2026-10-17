@@ -38,6 +38,7 @@ THEMES = {
 
 # Bundled (SIL OFL) so the cabinet looks the same whatever OS it runs.
 FONT_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
+SCRIPT_FONT = FONT_DIR / "Pacifico-Regular.ttf"
 FONTS = {
     # All three cover Latin (incl. Estonian õ/š/ž) and Cyrillic, so Russian
     # titles render properly instead of as boxes.
@@ -54,14 +55,17 @@ class Theme:
         self._text_cache: OrderedDict[tuple, pygame.Surface] = OrderedDict()
         self._bg: pygame.Surface | None = None
 
-    def font(self, size: int, bold: bool = False, title: bool = False) -> pygame.font.Font:
-        key = (size, bold, title)
+    def font(self, size: int, bold: bool = False, title: bool = False,
+             italic: bool = False, script: bool = False) -> pygame.font.Font:
+        key = (size, bold, title, italic, script)
         if key not in self._fonts:
-            path = FONTS["title" if title else "bold" if bold else "regular"]
+            path = SCRIPT_FONT if script else FONTS["title" if title else "bold" if bold else "regular"]
             try:
                 f = pygame.font.Font(path, size)
             except (OSError, pygame.error):
                 f = pygame.font.Font(None, int(size * 1.3))
+            if italic:
+                f.set_italic(True)
             self._fonts[key] = f
         return self._fonts[key]
 

@@ -11,7 +11,9 @@ single menu instead of taking the jukebox down.
 from __future__ import annotations
 
 import logging
+import random
 import re
+from dataclasses import replace
 from typing import Any
 
 from ..models import Collection, Item, Shelf, Track
@@ -32,8 +34,6 @@ DEFAULT_GENRES = [
      "query": "british punk new wave", "match": ["punk", "new wave"]},
     {"name": "2 Tone & Ska", "about": "The Specials, Madness, The Beat, The Selecter",
      "query": "2 tone ska", "match": ["ska", "2 tone", "two tone", "2-tone"]},
-    {"name": "Northern Soul", "about": "Wigan Casino all-nighters",
-     "query": "northern soul", "match": ["northern soul"]},
     {"name": "New Romantics & Synth-pop", "about": "Duran Duran, Depeche Mode, Pet Shop Boys",
      "query": "new romantics synth pop", "match": ["new romantic", "synth", "new wave"]},
     {"name": "80s Hits", "about": "The big hits of the eighties",
@@ -46,36 +46,33 @@ DEFAULT_GENRES = [
      "query": "90s hits", "match": ["90s", "nineties"]},
     {"name": "Rave & Acid House", "about": "The Prodigy, Altern-8, SL2, 808 State",
      "query": "90s rave anthems", "match": ["rave", "acid house", "hardcore"]},
+    {"name": "Handbag House", "about": "UK 90s piano house and club anthems",
+     "query": "handbag house 90s UK", "match": ["handbag house", "handbag"]},
     {"name": "Drum & Bass and Jungle", "about": "Goldie, Roni Size, LTJ Bukem",
      "query": "drum and bass jungle classics", "match": ["drum", "jungle", "dnb", "d&b"]},
     {"name": "UK Garage", "about": "Artful Dodger, Craig David, Shanks & Bigfoot",
      "query": "uk garage classics", "match": ["garage", "ukg"]},
     {"name": "Big Beat & Trip Hop", "about": "Fatboy Slim, The Chemical Brothers, Massive Attack",
      "query": "big beat trip hop", "match": ["big beat", "trip hop", "trip-hop"]},
+    {"name": "Dubstep", "about": "UK bass music, from dubstep roots to club anthems",
+     "query": "UK dubstep classics", "match": ["dubstep", "brostep"]},
     {"name": "Eurodance", "about": "2 Unlimited, Haddaway, Culture Beat, Snap!",
      "query": "eurodance 90s", "match": ["eurodance", "euro dance", "90s dance"]},
-    {"name": "Italo Disco", "about": "Den Harrow, Gazebo, Ryan Paris",
-     "query": "italo disco", "match": ["italo"]},
     {"name": "Trance", "about": "Tiësto, ATB, Paul van Dyk, Darude",
      "query": "trance classics", "match": ["trance"]},
+    {"name": "Big Room House", "about": "European festival house: Swedish House Mafia, Hardwell, Martin Garrix",
+     "query": "big room house anthems", "match": ["big room", "bigroom"]},
     {"name": "2000s Indie", "about": "Arctic Monkeys, The Libertines, Kaiser Chiefs",
      "query": "2000s british indie", "match": ["indie"]},
+    {"name": "Boy Band", "about": "Take That, Boyzone, Westlife, Blue, 5ive, East 17",
+     "query": "British Irish boy bands", "match": ["boy band", "boyband", "take that", "boyzone",
+                                                      "westlife", "5ive", "east 17"]},
     {"name": "2000s Hits", "about": "The big hits of the noughties",
      "query": "2000s hits", "match": ["2000s", "00s", "noughties"]},
     {"name": "Eurovision", "about": "Douze points",
      "query": "eurovision", "match": ["eurovision"]},
     {"name": "British Heavy Metal", "about": "Iron Maiden, Judas Priest, Black Sabbath",
      "query": "nwobhm british heavy metal", "match": ["nwobhm", "heavy metal", "metal"]},
-    {"name": "Folk & Celtic", "about": "British and Irish folk",
-     "query": "british irish folk celtic", "match": ["folk", "celtic", "irish"]},
-    {"name": "French Chanson", "about": "Édith Piaf, Charles Aznavour, Jacques Brel",
-     "query": "chanson française", "match": ["chanson", "french", "française", "francaise"]},
-    {"name": "Schlager", "about": "German party classics",
-     "query": "schlager", "match": ["schlager"]},
-    {"name": "Русский рок", "about": "Кино, ДДТ, Сплин, Би-2",
-     "query": "русский рок", "match": ["рок", "rock"]},
-    {"name": "Русская поп-музыка", "about": "Russian pop of the 90s and 2000s",
-     "query": "русская поп музыка хиты", "match": ["поп", "хит", "русск", "russian"]},
     {"name": "Eesti muusika", "about": "Ultima Thule, Terminaator, Smilers, Vaiko Eplik",
      "query": "eesti muusika", "match": ["eesti", "estonia"]},
     {"name": "Classical", "about": "The great European composers",
@@ -147,6 +144,7 @@ class YouTubeMusicSource(Source):
     def __init__(
         self,
         auth_file: str | None = None,
+        user: str | None = None,
         language: str = "en",
         location: str = "GB",
         charts: list[dict] | None = None,
@@ -158,7 +156,8 @@ class YouTubeMusicSource(Source):
         if client is None:
             from ytmusicapi import YTMusic
 
-            client = YTMusic(auth_file or None, language=language, location=location)
+            client = YTMusic(auth_file or None, user=user or None,
+                             language=language, location=location)
         self.yt = client
         self.authenticated = bool(auth_file)
         self.charts = [c for c in (charts if charts is not None else DEFAULT_CHARTS) if c.get("country")]
@@ -292,7 +291,8 @@ class YouTubeMusicSource(Source):
             data = self._safe("playlist", self.yt.get_playlist, c.ref, limit=200)
             if data is None:
                 raise SourceError(f"Couldn't open playlist {c.title}")
-            return self._tracks(data.get("tracks"), art_url=c.art_url)
+            tracks = self._tracks(data.get("tracks"), art_url=c.art_url)
+            return [replace(track, genre=c.genre) for track in tracks] if c.genre else tracks
         if c.kind == "album":
             data = self._safe("album", self.yt.get_album, c.ref)
             if data is None:
@@ -343,7 +343,7 @@ class YouTubeMusicSource(Source):
                 if (col and col.ref not in seen and any(m in title for m in match)
                         and not any(re.search(rf"\b{re.escape(x)}", title) for x in self.genre_exclude)):
                     seen.add(col.ref)
-                    found.append(col)
+                    found.append(replace(col, genre=name))
         if not found:
             raise SourceError(f"No {name} playlists found right now")
         return found
@@ -385,6 +385,21 @@ class YouTubeMusicSource(Source):
         if not data:
             return []
         return [t for t in self._tracks(data.get("tracks")) if t.id != track.id]
+
+    def popular_dance(self, limit: int = 60) -> list[Track]:
+        """Build a shuffled pool of mainstream UK dance and club tracks."""
+        tracks: list[Track] = []
+        seen: set[str] = set()
+        queries = ("Kiss Dance", "UK dance hits", "UK club anthems")
+        for query in queries:
+            rows = self._safe(f"popular dance[{query}]", self.yt.search,
+                              query, filter="songs", limit=25)
+            for track in self._tracks(rows):
+                if track.id not in seen:
+                    seen.add(track.id)
+                    tracks.append(track)
+        random.shuffle(tracks)
+        return tracks[:max(1, limit)]
 
     def playable_url(self, track: Track) -> str:
         return f"https://music.youtube.com/watch?v={track.id}"

@@ -1,4 +1,5 @@
 import pytest
+from types import SimpleNamespace
 
 from jukebox.models import Collection, Track
 from jukebox.sources.base import SourceError
@@ -68,6 +69,20 @@ class FakeYT:
 def src(**kw):
     broken = kw.pop("broken", ())
     return YouTubeMusicSource(client=FakeYT(broken), **kw)
+
+
+def test_brand_account_id_is_passed_to_ytmusic(monkeypatch):
+    calls = {}
+
+    def fake_ytmusic(auth, **kwargs):
+        calls.update(auth=auth, **kwargs)
+        return FakeYT()
+
+    monkeypatch.setitem(__import__("sys").modules, "ytmusicapi",
+                        SimpleNamespace(YTMusic=fake_ytmusic))
+    YouTubeMusicSource(auth_file="account.json", user="123456789")
+    assert calls == {"auth": "account.json", "user": "123456789",
+                     "language": "en", "location": "GB"}
 
 
 def test_parse_helpers():
@@ -152,6 +167,26 @@ def test_playable_url():
     assert src().playable_url(Track("abc", "t")) == "https://music.youtube.com/watch?v=abc"
 
 
+def test_popular_dance_uses_uk_radio_searches_and_deduplicates(monkeypatch):
+    class DanceYT:
+        def __init__(self):
+            self.queries = []
+
+        def search(self, query, filter=None, limit=20):
+            self.queries.append((query, filter, limit))
+            return [dict(SONG, videoId=f"{query}-track"), SONG]
+
+    import jukebox.sources.ytmusic as ytmusic
+    monkeypatch.setattr(ytmusic.random, "shuffle", lambda tracks: None)
+    client = DanceYT()
+    tracks = YouTubeMusicSource(client=client).popular_dance(limit=10)
+    assert [query for query, _, _ in client.queries] == [
+        "Kiss Dance", "UK dance hits", "UK club anthems"]
+    assert all(filter == "songs" and limit == 25 for _, filter, limit in client.queries)
+    assert len(tracks) == 4
+    assert len({track.id for track in tracks}) == 4
+
+
 def test_chart_tab_opens_top_100_songs_then_other_lists():
     s = src()
     items = s.expand(Collection("chart", "Estonian Charts", "EE"))
@@ -193,13 +228,19 @@ def test_genre_keeps_only_matching_european_playlists():
     s = YouTubeMusicSource(client=GenreYT())
     items = s.expand(Collection("genre", "Britpop", "Britpop"))
     assert [i.title for i in items] == ["Britpop Anthems", "100 Best Britpop Songs"]
+    assert all(i.genre == "Britpop" for i in items)
+    assert s.expand(items[0])[0].genre == "Britpop"
     assert s.yt.genre_queries == [("britpop", "featured_playlists"), ("britpop", "community_playlists")]
 
 
 def test_genre_menu_is_european_with_descriptions():
     menu = src().expand(Collection("menu", "Genres", "genres"))
     names = [c.title for c in menu]
-    assert "Britpop" in names and "Русский рок" in names and "Eesti muusika" in names
+    assert "Britpop" in names and "Eesti muusika" in names
+    assert {"Big Room House", "Dubstep", "Handbag House", "Boy Band"} <= set(names)
+    assert not {"Northern Soul", "Italo Disco", "Folk & Celtic", "French Chanson",
+                "Schlager", "Русский рок", "Русская поп-музыка"} & set(names)
+    assert len(names) == 25
     assert not any(x in " ".join(names) for x in ("Hip-Hop", "R&B", "Country"))
     assert menu[names.index("Britpop")].subtitle.startswith("Oasis")
 

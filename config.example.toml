@@ -8,7 +8,7 @@ width = 1280          # logical resolution; scaled to fit the real screen
 height = 720
 fps = 60
 hide_cursor = true
-title = "JUKEBOX"     # marquee text
+title = "JukeTube"    # app name shown in the marquee
 attract_after = 45    # seconds without input before the big now-playing screen (0 = never)
 theme = "neon"        # "neon" or "classic"
 
@@ -34,7 +34,7 @@ max_credits = 99
 max_queue = 50              # max paid requests waiting
 max_per_track_in_queue = 1  # stop the same song being queued twice
 allow_skip = true
-autoplay = true             # play "house music" when the queue is empty
+autoplay = false            # start only after somebody selects a song
 autoplay_delay = 3          # seconds of silence before autoplay starts
 autoplay_seed = ""          # optional YouTube Music playlist id for house music
                             # (default: shuffled songs from the first chart below)
@@ -49,6 +49,16 @@ name = "ytmusic"
 # Enables a "Your Library" menu with your saved playlists. Not needed
 # for search, charts, genres or playback.
 auth_file = ""
+# Optional family profiles. Give each Google account a private auth file.
+[[source.ytmusic.profiles]]
+id = "parent"
+name = "Parent"
+auth_file = "~/jukebox-auth/parent.json"
+
+[[source.ytmusic.profiles]]
+id = "child-one"
+name = "Child One"
+auth_file = "~/jukebox-auth/child-one.json"
 language = "en"
 location = "GB"        # country for the home feed and search results
 allow_explicit = true
@@ -73,6 +83,7 @@ country = "EE"
 # (I-PAC, etc.) send. Run `jukebox --list-inputs` to see what your
 # cabinet's buttons send.
 [controls]
+exit_hold_seconds = 1.0 # hold Coin + Start together on one panel to quit
 repeat_delay = 0.35   # seconds before a held direction starts repeating
 repeat_rate = 0.07    # seconds between repeats
 

@@ -74,6 +74,7 @@ def test_queue_advances_when_track_ends():
     eng.tick()
     assert eng.now_playing.track == _track(2)
     assert eng.history[0] == _track(1)
+    assert eng.completed[0] == _track(1)
 
 
 def test_requests_jump_ahead_of_autoplay_and_interrupt_it():

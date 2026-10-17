@@ -4,6 +4,8 @@ Guidance for coding agents (Codex etc.) working on this repo. Read README.md
 for the user-facing overview; this file covers what you need in order to change
 the code safely.
 
+For cabinet deployment, read `../arcade-cabinet-notes.md` first for SSH access, Attract-Mode integration and house rules.
+
 ## What this is
 
 A fullscreen pygame jukebox for a home arcade cabinet, driven by a joystick

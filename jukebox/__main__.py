@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
 import time
+from pathlib import Path
 
 from .config import cache_dir, load_config
 
@@ -79,7 +81,22 @@ def main(argv: list[str] | None = None) -> int:
         source = DemoSource()
     else:
         src_cfg = cfg["source"]
-        opts = {k: v for k, v in (src_cfg.get(src_cfg["name"]) or {}).items() if v != ""}
+        source_cfg = src_cfg.get(src_cfg["name"]) or {}
+        opts = {k: v for k, v in source_cfg.items()
+                if k != "profiles" and v != ""}
+        profiles = source_cfg.get("profiles") or []
+        if profiles:
+            profile_file = Path(cfg["_path"]).with_name("profile.json")
+            try:
+                profile_id = json.loads(profile_file.read_text()).get("id")
+            except (OSError, ValueError, AttributeError):
+                profile_id = None
+            profile = next((p for p in profiles if p.get("id") == profile_id), profiles[0])
+            profile_auth = profile.get("auth_file", opts.get("auth_file", ""))
+            opts["auth_file"] = os.path.expanduser(profile_auth) if profile_auth else ""
+            if profile.get("user"):
+                opts["user"] = str(profile["user"])
+            cfg["_profile_id"] = profile.get("id", "")
         source = create_source(src_cfg["name"], opts)
     player, warning = create_player(cfg["audio"], simulate=args.demo or args.silent)
 

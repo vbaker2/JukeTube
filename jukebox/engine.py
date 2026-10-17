@@ -56,6 +56,7 @@ class Jukebox:
         self.autoplay_pool: deque[Track] = deque()
         self.now_playing: QueueEntry | None = None
         self.history: deque[Track] = deque(maxlen=self.cfg.history_size)
+        self.completed: deque[Track] = deque(maxlen=self.cfg.history_size)
         self.credits = 0  # in songs, not coins
         self._silent_since: float | None = clock()
         self._radio_future: Future | None = None
@@ -190,6 +191,7 @@ class Jukebox:
                 self._notify(f"Couldn't play {self.now_playing.track.title}")
             else:
                 self._failures = 0
+                self.completed.append(self.now_playing.track)
             self._finish_current()
         if self.now_playing is None:
             if self.queue:

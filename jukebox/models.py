@@ -17,6 +17,7 @@ class Track:
     art_url: str | None = None
     source: str = ""  # name of the Source that produced it
     explicit: bool = False
+    genre: str = ""  # browsing genre, when the song came from a genre playlist
 
     @property
     def key(self) -> str:
@@ -37,6 +38,7 @@ class Collection:
     subtitle: str = ""
     art_url: str | None = None
     source: str = ""
+    genre: str = ""  # genre context carried by playlists from a genre menu
 
 
 Item = Track | Collection
