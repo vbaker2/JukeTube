@@ -88,8 +88,8 @@ three diagonal buttons and four top buttons. Button wiring still needs live
 calibration before actions can be labelled on the physical positions.
 
 **Quit without a keyboard:** hold **Coin + Start together on the same panel for
-one second**. This exits directly, including from the idle screen. Single Coin
-and Start taps take effect when released. On the calibrated cabinet, the
+one second**, then confirm with **SELECT** (or cancel with **BACK**). Single
+Coin and Start taps take effect when released. On the calibrated cabinet, the
 right-hand COIN button cycles family profiles; the left-hand COIN button adds
 credit. **Settings → Playback controls** also
 provides skip, pause, volume and an exit confirmation using just the stick and

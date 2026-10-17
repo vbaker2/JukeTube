@@ -79,3 +79,19 @@ def test_pending_playlist_request_does_not_block_ui_update(tmp_path):
         assert app._pending_queue == [pending]
     finally:
         app.shutdown()
+
+
+def test_cabinet_quit_chord_asks_for_confirmation(tmp_path):
+    app = make_app(tmp_path)
+    try:
+        app.dispatch(Action.QUIT)
+        assert app.confirm_exit
+        assert app.running
+        app.dispatch(Action.BACK)
+        assert not app.confirm_exit
+        assert app.running
+        app.dispatch(Action.QUIT)
+        app.dispatch(Action.SELECT)
+        assert not app.running
+    finally:
+        app.shutdown()

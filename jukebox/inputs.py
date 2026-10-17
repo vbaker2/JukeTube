@@ -32,7 +32,7 @@ class Action(enum.Enum):
     VOLUME_UP = "volume_up"
     VOLUME_DOWN = "volume_down"
     EXIT = "exit"
-    QUIT = "quit"  # deliberate held cabinet gesture; no confirmation needed
+    QUIT = "quit"  # deliberate held cabinet gesture; asks before closing
 
 
 DIRECTIONS = (Action.UP, Action.DOWN, Action.LEFT, Action.RIGHT)

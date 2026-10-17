@@ -414,7 +414,7 @@ class App:
     def dispatch(self, action: Action) -> None:
         self.last_input = time.monotonic()
         if action == Action.QUIT:
-            self.running = False
+            self.confirm_exit = True
             return
         eng = self.engine
         if self.attract:
