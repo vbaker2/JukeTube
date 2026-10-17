@@ -9,6 +9,7 @@ before exposing it to the UI for installation.
 from __future__ import annotations
 
 import logging
+import json
 import os
 import shutil
 import subprocess
@@ -17,6 +18,10 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from dataclasses import asdict
+
+from .engine import QueueEntry
+from .models import Track
 
 log = logging.getLogger(__name__)
 
@@ -30,6 +35,7 @@ class UpdateAgent:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._ready: str | None = None
+        self._applying = False
         self._retry_after = 0.0
         self._stopped = threading.Event()
         self._worker: threading.Thread | None = None
@@ -55,6 +61,9 @@ class UpdateAgent:
             self._stopped.wait(self.interval)
 
     def _stage_latest(self) -> None:
+        with self._lock:
+            if self._ready is not None or self._applying:
+                return
         key = Path.home() / ".ssh" / "juketube_deploy"
         env = os.environ.copy()
         env["GIT_SSH_COMMAND"] = (
@@ -94,8 +103,24 @@ class UpdateAgent:
         except OSError:
             return ""
 
-    def hold_at_boundary(self) -> bool:
-        """Called by the playback engine; true holds at idle while installing."""
+    def restore_queue(self, engine) -> None:
+        """Restore queued songs saved immediately before an in-place update."""
+        path = self.state_dir / "update-queue.json"
+        try:
+            entries = json.loads(path.read_text())
+            restored = [QueueEntry(Track(**item["track"]), bool(item["requested"]))
+                        for item in entries]
+            engine.queue.extend(restored)
+            path.unlink()
+            if restored:
+                log.info("Restored %d queued song(s) after software update", len(restored))
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            log.error("Couldn't restore queued songs after update: %s", exc)
+
+    def hold_at_boundary(self, queue: list[QueueEntry]) -> bool:
+        """Install after the current track; persist the remaining queue first."""
         if time.monotonic() < self._retry_after:
             return False
         with self._lock:
@@ -103,9 +128,10 @@ class UpdateAgent:
             if commit is None:
                 return False
             self._ready = None
+            self._applying = True
         try:
             self._announce()
-            self._install(commit)
+            self._install(commit, queue)
             log.info("Installed update %s; restarting JukeTube in place", commit[:12])
             return True
         except Exception:
@@ -114,6 +140,9 @@ class UpdateAgent:
             with self._lock:
                 self._ready = commit
             return False
+        finally:
+            with self._lock:
+                self._applying = False
 
     def _announce(self) -> None:
         speaker = shutil.which("espeak-ng") or shutil.which("espeak")
@@ -127,7 +156,7 @@ class UpdateAgent:
             subprocess.run([mpv, "--no-video", "--really-quiet", str(wav)],
                            check=True, timeout=20)
 
-    def _install(self, commit: str) -> None:
+    def _install(self, commit: str, queue: list[QueueEntry]) -> None:
         # Only repository files are copied. Cabinet credentials, config,
         # favourites, the virtualenv and Attract's launcher stay in place.
         listed = subprocess.run(["git", "-C", str(self.stage), "ls-files", "-z"],
@@ -135,9 +164,19 @@ class UpdateAgent:
         backup = Path(tempfile.mkdtemp(prefix="juketube-update-backup-",
                                        dir=self.state_dir))
         copied: list[Path] = []
+        marker = self.state_dir / "installed-commit"
+        old_marker = marker.read_text() if marker.exists() else None
+        queue_path = self.state_dir / "update-queue.json"
         try:
             self._copy_release_files(listed, backup, copied)
-            (self.state_dir / "installed-commit").write_text(commit + "\n")
+            pending = [{"track": asdict(entry.track), "requested": entry.requested}
+                       for entry in queue]
+            tmp_queue = self.state_dir / "update-queue.tmp"
+            tmp_queue.write_text(json.dumps(pending))
+            os.replace(tmp_queue, queue_path)
+            tmp_marker = self.state_dir / "installed-commit.tmp"
+            tmp_marker.write_text(commit + "\n")
+            os.replace(tmp_marker, marker)
         except Exception:
             log.exception("Copying release files failed; restoring previous files")
             for rel in copied:
@@ -148,6 +187,11 @@ class UpdateAgent:
                     shutil.copy2(old, dest)
                 else:
                     dest.unlink(missing_ok=True)
+            queue_path.unlink(missing_ok=True)
+            if old_marker is None:
+                marker.unlink(missing_ok=True)
+            else:
+                marker.write_text(old_marker)
             raise
         finally:
             shutil.rmtree(backup, ignore_errors=True)

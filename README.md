@@ -242,8 +242,9 @@ Keep these files private: they give access to your Google account.
 
 On the Lenovo cabinet, the Attract-Mode launcher checks the GitHub `master`
 branch every five minutes, runs the test suite on a staged release, and applies
-it after the current song and requested queue finish. It announces “Updating
-software” first, then restarts JukeTube in place without stopping Attract-Mode.
+it when the current song ends. Any remaining queue is saved and restored after
+restart. It announces “Updating software” first, then restarts JukeTube in place
+without stopping Attract-Mode.
 
 ## Keeping it working
 

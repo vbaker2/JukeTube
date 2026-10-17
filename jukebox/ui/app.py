@@ -68,6 +68,7 @@ class App:
         if os.environ.get("JUKEBOX_AUTO_UPDATE") == "1":
             self.updater = UpdateAgent(Path(__file__).resolve().parents[2],
                                        Path.home() / ".local/state/jukebox")
+            self.updater.restore_queue(self.engine)
             self.updater.start()
         self.theme = Theme(disp.get("theme", "neon"))
         self.art = ArtCache(cache_dir)

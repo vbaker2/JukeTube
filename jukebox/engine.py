@@ -183,7 +183,7 @@ class Jukebox:
             return False
         return True
 
-    def tick(self, before_start: Callable[[], bool] | None = None) -> None:
+    def tick(self, before_start: Callable[[list[QueueEntry]], bool] | None = None) -> None:
         reason = self.player.take_finished()
         if reason and self.now_playing:
             if reason == "error":
@@ -196,8 +196,8 @@ class Jukebox:
         # A maintenance hook can hold playback at a track boundary (for
         # example, while a tested software update is installed). Returning
         # true suppresses both the next queued track and idle autoplay.
-        held = bool(before_start and self.now_playing is None and not self.queue
-                    and before_start())
+        held = bool(before_start and self.now_playing is None
+                    and before_start(list(self.queue)))
         if self.now_playing is None and not held:
             if self.queue:
                 # Back off if every track is failing (e.g. network down).

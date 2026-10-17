@@ -26,8 +26,9 @@ The cabinet launcher enables the in-app updater. It checks `master` every five
 minutes using the repository-scoped read-only key at `~/.ssh/juketube_deploy`,
 clones the candidate to `~/.local/state/jukebox/staged-release`, and runs the
 cabinet test suite before marking a release ready. A release is installed only
-when both the current song and the requested queue are empty. The current
-process then re-execs in place, so Attract-Mode remains the parent. Failed
+when the current song ends. Any songs still queued are saved and restored
+after restart, so updates do not wait for a long playlist to finish. The
+current process then re-execs in place, so Attract-Mode remains the parent. Failed
 checks or tests leave the installed code alone and are recorded in
 `~/.local/state/jukebox/app.log`.
 

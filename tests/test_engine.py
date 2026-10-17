@@ -188,14 +188,15 @@ def test_autoplay_radio_option_follows_last_song():
 
 def test_boundary_hook_holds_autoplay_until_update_can_restart():
     eng, _, _ = make(autoplay_delay=0)
-    assert eng.tick(before_start=lambda: True) is None
+    assert eng.tick(before_start=lambda _queue: True) is None
     assert eng.now_playing is None
 
 
-def test_boundary_hook_waits_for_queued_requests():
+def test_boundary_hook_can_hold_before_queued_request():
     eng, _, _ = make(autoplay=False)
     eng.request(_track(1))
     called = []
-    eng.tick(before_start=lambda: called.append(True) or True)
-    assert not called
-    assert eng.now_playing and eng.now_playing.track == _track(1)
+    eng.tick(before_start=lambda _queue: called.append(True) or True)
+    assert called
+    assert eng.now_playing is None
+    assert list(eng.queue)[0].track == _track(1)
