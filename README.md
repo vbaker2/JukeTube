@@ -88,8 +88,11 @@ three diagonal buttons and four top buttons. Button wiring still needs live
 calibration before actions can be labelled on the physical positions.
 
 **Quit without a keyboard:** hold **Coin + Start together on the same panel for
-one second**, then confirm with **SELECT** (or cancel with **BACK**). Single
-Coin and Start taps take effect when released. On the calibrated cabinet, the
+one second**. JukeTube exits straight away and Attract-Mode's menu returns,
+the same gesture as the fruit machine. There is deliberately no confirmation:
+the cabinet has no keyboard, so an unanswered dialog would strand it. Coin (8)
+and Start (9) always work for this on either panel, even if the button
+calibration is out of date. Single Coin and Start taps take effect when released. On the calibrated cabinet, the
 right-hand COIN button cycles family profiles; the left-hand COIN button adds
 credit. **Settings → Playback controls** also
 provides skip, pause, volume and an exit confirmation using just the stick and

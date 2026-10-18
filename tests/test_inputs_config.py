@@ -64,6 +64,16 @@ def test_joystick_axis_hat_and_buttons():
     assert m.handle(btn, 0) == [Action.SELECT]
 
 
+DR = "0300457e790000000600000010010000"  # both DragonRise panels share this guid
+
+
+def panels(m, *instances):
+    """Connect DragonRise panels with the given SDL instance ids, in order."""
+    for inst in instances or (0, 1):
+        m.add_device(inst, DR)
+    return m
+
+
 def cabinet_button(button, down=True, device=0):
     return pygame.event.Event(pygame.JOYBUTTONDOWN if down else pygame.JOYBUTTONUP,
                               instance_id=device, button=button)
@@ -101,8 +111,8 @@ def test_cabinet_exit_requires_one_panel_and_cancels_on_release_or_disconnect():
 
 
 def test_right_coin_can_switch_profiles_and_still_quit_with_start():
-    m = InputMapper(DEFAULTS["controls"])
-    m.set_device_button_action(1, 8, Action.PROFILE_NEXT)
+    m = panels(InputMapper(DEFAULTS["controls"]))
+    m.set_device_button_action((DR, 1), 8, Action.PROFILE_NEXT)
     assert m.handle(cabinet_button(8, device=1), 0) == []
     assert m.handle(cabinet_button(8, False, device=1), 0.1) == [Action.PROFILE_NEXT]
     # The override is device-specific; left coin still adds credit.
@@ -118,9 +128,9 @@ def test_right_coin_can_switch_profiles_and_still_quit_with_start():
 
 
 def test_calibrated_right_button_chords_change_volume_and_singles_still_work():
-    m = InputMapper(DEFAULTS["controls"])
-    m.set_device_chord(0, (10, 11), Action.VOLUME_UP)
-    m.set_device_chord(0, (11, 12), Action.VOLUME_DOWN)
+    m = panels(InputMapper(DEFAULTS["controls"]))
+    m.set_device_chord((DR, 0), (10, 11), Action.VOLUME_UP)
+    m.set_device_chord((DR, 0), (11, 12), Action.VOLUME_DOWN)
     assert m.handle(cabinet_button(10), 0) == []
     assert m.handle(cabinet_button(11), 0.1) == [Action.VOLUME_UP]
     assert m.handle(cabinet_button(10, False), 0.2) == []
@@ -129,7 +139,7 @@ def test_calibrated_right_button_chords_change_volume_and_singles_still_work():
     assert m.handle(cabinet_button(11), 1) == []
     assert m.handle(cabinet_button(11, False), 1.1) == []  # unmapped standalone
 
-    m.set_device_button_action(0, 10, Action.SKIP)
+    m.set_device_button_action((DR, 0), 10, Action.SKIP)
     assert m.handle(cabinet_button(10), 2) == []
     assert m.handle(cabinet_button(10, False), 2.1) == [Action.SKIP]
 
@@ -140,10 +150,10 @@ def test_calibrated_right_button_chords_change_volume_and_singles_still_work():
 
 
 def test_chord_shortcut_only_fires_once_and_discards_both_single_actions():
-    m = InputMapper(DEFAULTS["controls"])
-    m.set_device_button_action(0, 10, Action.SKIP)
-    m.set_device_button_action(0, 11, Action.PAUSE)
-    m.set_device_chord(0, (10, 11), Action.VOLUME_UP)
+    m = panels(InputMapper(DEFAULTS["controls"]))
+    m.set_device_button_action((DR, 0), 10, Action.SKIP)
+    m.set_device_button_action((DR, 0), 11, Action.PAUSE)
+    m.set_device_chord((DR, 0), (10, 11), Action.VOLUME_UP)
     assert m.handle(cabinet_button(10), 0) == []
     assert m.handle(cabinet_button(11), 0.1) == [Action.VOLUME_UP]
     assert m.handle(cabinet_button(10, False), 0.2) == []
@@ -226,3 +236,52 @@ def test_bundled_fonts_render_cyrillic_and_estonian():
         shapes = {pygame.image.tobytes(f.render(ch, True, (255, 255, 255)), "RGBA")
                   for ch in "ЖЯЮЩõšž"}
         assert len(shapes) == 7, path
+
+
+def test_calibration_follows_panels_when_ultrastik_connects_first():
+    """Regression: calibration saved when the panels were instances 0 and 1
+    must still apply when the UltraStik takes instance 0 at boot."""
+    from jukebox.inputs import calibration_slots
+
+    saved = {"top_right": {"button": 8, "instance_id": 1, "guid": DR},
+             "top_left": {"button": 8, "instance_id": 0, "guid": DR}}
+    slots = calibration_slots(saved)
+    assert slots == {"top_right": (DR, 1), "top_left": (DR, 0)}
+    m = InputMapper(DEFAULTS["controls"])
+    m.set_device_button_action(slots["top_right"], 8, Action.PROFILE_NEXT)
+    m.add_device(0, "ultrastik-guid")
+    panels(m, 1, 2)
+    # The right panel is now instance 2, and gets the right panel's mapping.
+    assert m.button_action(2, 8) == Action.PROFILE_NEXT
+    assert m.button_action(1, 8) == Action.COIN
+    assert m.button_action(0, 8) == Action.COIN  # UltraStik: plain defaults
+
+
+def test_new_calibrations_can_store_ordinal_directly():
+    from jukebox.inputs import calibration_slots
+
+    assert calibration_slots({"x": {"button": 1, "instance_id": 7, "ordinal": 1, "guid": DR}}) == {
+        "x": (DR, 1)}
+
+
+def test_quit_chord_works_on_either_panel_even_with_stale_calibration():
+    m = InputMapper(DEFAULTS["controls"])
+    # Calibration pointing at a panel that isn't connected any more.
+    m.set_device_button_action((DR, 5), 8, Action.SKIP)
+    m.add_device(0, "ultrastik-guid")
+    panels(m, 1, 2)
+    for device, t in ((1, 0.0), (2, 10.0)):
+        m.handle(cabinet_button(8, device=device), t)
+        m.handle(cabinet_button(9, device=device), t)
+        assert m.repeats(t + 1.05) == [Action.QUIT]
+        m.handle(cabinet_button(8, False, device=device), t + 2)
+        m.handle(cabinet_button(9, False, device=device), t + 2)
+
+
+def test_panel_reconnect_keeps_its_slot():
+    m = panels(InputMapper(DEFAULTS["controls"]), 1, 2)
+    m.set_device_button_action((DR, 1), 8, Action.PROFILE_NEXT)
+    m.remove_device(2)
+    assert m.button_action(1, 8) == Action.COIN
+    m.add_device(3, DR)  # SDL gives a reconnected device a new instance id
+    assert m.button_action(3, 8) == Action.PROFILE_NEXT

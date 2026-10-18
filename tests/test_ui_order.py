@@ -81,17 +81,25 @@ def test_pending_playlist_request_does_not_block_ui_update(tmp_path):
         app.shutdown()
 
 
-def test_cabinet_quit_chord_asks_for_confirmation(tmp_path):
+def test_cabinet_quit_chord_exits_immediately(tmp_path):
+    """Coin + Start held must leave straight away: the cabinet has no
+    keyboard, so an unanswered confirmation dialog strands it."""
     app = make_app(tmp_path)
     try:
+        app.attract = True  # also from the idle screen
         app.dispatch(Action.QUIT)
-        assert app.confirm_exit
-        assert app.running
-        app.dispatch(Action.BACK)
-        assert not app.confirm_exit
-        assert app.running
-        app.dispatch(Action.QUIT)
-        app.dispatch(Action.SELECT)
         assert not app.running
+        assert not app.confirm_exit
+    finally:
+        app.shutdown()
+
+
+def test_keyboard_escape_still_asks_first(tmp_path):
+    app = make_app(tmp_path)
+    try:
+        app.dispatch(Action.EXIT)
+        assert app.confirm_exit and app.running
+        app.dispatch(Action.BACK)
+        assert not app.confirm_exit and app.running
     finally:
         app.shutdown()
