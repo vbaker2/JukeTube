@@ -90,6 +90,15 @@ config.example.toml documented config; keep it in sync with config.DEFAULTS
   After `loadfile`, events from the *previous* file are ignored until
   `start-file` arrives (`_awaiting_start`). Don't remove that, or skips
   will randomly end the new track.
+- **Coin + Start quit must stay immediate.** Holding Coin + Start for 1s on one
+  panel exits JukeTube at once so Attract-Mode's menu returns. Never put a
+  confirmation dialog in front of it: the cabinet has no keyboard, and on
+  2026-10-18 a "SELECT to confirm" dialog left the owner rebooting the cabinet.
+  Plain buttons 8 + 9 always count for this, regardless of calibration.
+- **Never key cabinet calibration on SDL instance ids.** They depend on
+  enumeration order: the UltraStik usually connects first and takes instance 0,
+  pushing the DragonRise panels to 1 and 2. Calibration is resolved through
+  slots (`guid`, ordinal among same-guid devices); see `calibration_slots`.
 - **Input typing mode:** on the search screen, printable keys type rather
   than trigger their mapped action, and Backspace deletes. BACK always leaves
   search; the query persists in `app.last_query`.

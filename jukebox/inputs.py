@@ -35,6 +35,30 @@ class Action(enum.Enum):
     QUIT = "quit"  # deliberate held cabinet gesture; asks before closing
 
 
+Slot = tuple[str, int]  # (joystick guid, ordinal among connected devices with that guid)
+
+
+def calibration_slots(positions: dict) -> dict[str, Slot]:
+    """Stable slots for each calibrated button position.
+
+    Records written by older calibrations only carry an SDL instance id, which
+    shifts between boots. Two identical DragonRise boards share a guid, so a
+    board is identified by its rank among same-guid devices: the lower instance
+    id at calibration time is ordinal 0, which SDL enumerates first again."""
+    by_guid: dict[str, set[int]] = {}
+    for rec in positions.values():
+        if isinstance(rec.get("instance_id"), int):
+            by_guid.setdefault(str(rec.get("guid", "")), set()).add(rec["instance_id"])
+    slots = {}
+    for pos, rec in positions.items():
+        guid = str(rec.get("guid", ""))
+        if isinstance(rec.get("ordinal"), int):
+            slots[pos] = (guid, rec["ordinal"])
+        elif isinstance(rec.get("instance_id"), int):
+            slots[pos] = (guid, sorted(by_guid[guid]).index(rec["instance_id"]))
+    return slots
+
+
 DIRECTIONS = (Action.UP, Action.DOWN, Action.LEFT, Action.RIGHT)
 REPEATABLE = DIRECTIONS + (Action.VOLUME_UP, Action.VOLUME_DOWN)
 
@@ -63,6 +87,13 @@ class InputMapper:
             for b in buttons if isinstance(buttons, list) else [buttons]:
                 self.buttons[int(b)] = action
         # Optional per-encoder overrides are installed from cabinet calibration.
+        # They're stored against a stable *slot* (guid, ordinal among devices
+        # with that guid) because SDL instance ids depend on enumeration order:
+        # the UltraStik connecting first shifts both DragonRise panels.
+        self._slot_buttons: dict[tuple[Slot, int], Action] = {}
+        self._slot_chords: dict[tuple[Slot, tuple[int, int]], Action] = {}
+        self._slots: dict[int, Slot] = {}  # live instance id -> slot
+        # Derived from the above for the devices currently connected.
         self.device_buttons: dict[tuple[int, int], Action] = {}
         # Calibrated button chords (device, sorted button pair) -> action.
         self.device_chords: dict[tuple[int, tuple[int, int]], Action] = {}
@@ -80,21 +111,60 @@ class InputMapper:
         self._exit_started: dict[int, float] = {}
         self._exit_used: set[int] = set()
 
-    def set_device_button_action(self, instance_id: int, button: int, action: Action) -> None:
-        self.device_buttons[(int(instance_id), int(button))] = action
+    def set_device_button_action(self, slot: Slot, button: int, action: Action) -> None:
+        self._slot_buttons[(slot, int(button))] = action
+        self._rebuild_device_maps()
 
-    def set_device_chord(self, instance_id: int, buttons: tuple[int, int], action: Action) -> None:
+    def set_device_chord(self, slot: Slot, buttons: tuple[int, int], action: Action) -> None:
         pair = tuple(sorted((int(buttons[0]), int(buttons[1]))))
-        self.device_chords[(int(instance_id), pair)] = action
+        self._slot_chords[(slot, pair)] = action
+        self._rebuild_device_maps()
+
+    def instance_for(self, slot: Slot) -> int | None:
+        return next((i for i, s in self._slots.items() if s == slot), None)
+
+    def add_device(self, instance_id: int, guid: str) -> None:
+        """Register a connected joystick; it takes the next ordinal for its guid."""
+        ordinal = sum(1 for s in self._slots.values() if s[0] == guid)
+        self._slots[instance_id] = (guid, ordinal)
+        self._rebuild_device_maps()
+
+    def remove_device(self, instance_id: int) -> None:
+        self._slots.pop(instance_id, None)
+        # Re-number the remaining devices of each guid in connection order.
+        by_guid: dict[str, list[int]] = {}
+        for inst in sorted(self._slots):
+            by_guid.setdefault(self._slots[inst][0], []).append(inst)
+        self._slots = {inst: (guid, n) for guid, insts in by_guid.items() for n, inst in enumerate(insts)}
+        self._rebuild_device_maps()
+
+    def _rebuild_device_maps(self) -> None:
+        self.device_buttons = {(inst, b): a for (slot, b), a in self._slot_buttons.items()
+                               if (inst := self.instance_for(slot)) is not None}
+        self.device_chords = {(inst, pair): a for (slot, pair), a in self._slot_chords.items()
+                              if (inst := self.instance_for(slot)) is not None}
+
+    def slot_button_action(self, slot: Slot | None, button: int) -> Action | None:
+        """What a calibrated button does, whether or not its panel is connected."""
+        return self._slot_buttons.get((slot, button), self.buttons.get(button))
 
     def button_action(self, instance_id: int, button: int) -> Action | None:
         return self.device_buttons.get((instance_id, button), self.buttons.get(button))
 
-    @staticmethod
-    def _exit_role(action: Action | None) -> Action | None:
-        # The right-hand coin button changes profiles on a tap, but still
-        # counts as Coin when held together with Start for the quit gesture.
-        return Action.COIN if action == Action.PROFILE_NEXT else action
+    def _exit_roles(self, instance_id: int, button: int) -> set[Action]:
+        """Which halves of the Coin + Start quit gesture this button counts as.
+
+        The plain button numbers from the config (Coin 8, Start 9) always count,
+        whatever calibration says, so the cabinet can never be left without a
+        way back to Attract-Mode. The right-hand coin button changes profiles
+        on a tap, but still counts as Coin when held with Start."""
+        roles = set()
+        for action in (self.button_action(instance_id, button), self.buttons.get(button)):
+            if action == Action.PROFILE_NEXT:
+                action = Action.COIN
+            if action in (Action.COIN, Action.START):
+                roles.add(action)
+        return roles
 
     @staticmethod
     def _action(name: str) -> Action | None:
@@ -135,11 +205,11 @@ class InputMapper:
                 self.text_input.append(event.text)
         elif et == pygame.JOYBUTTONDOWN:
             action = self.button_action(event.instance_id, event.button)
-            if action in (Action.COIN, Action.START, Action.PROFILE_NEXT):
+            if self._exit_roles(event.instance_id, event.button):
                 held = self._cabinet_buttons.setdefault(event.instance_id, set())
                 held.add(event.button)
-                actions = {self._exit_role(self.button_action(event.instance_id, b)) for b in held}
-                if actions == {Action.COIN, Action.START}:
+                roles = set().union(*(self._exit_roles(event.instance_id, b) for b in held))
+                if roles >= {Action.COIN, Action.START}:
                     self._exit_started.setdefault(event.instance_id, now)
                 return out
             chord_key = (event.instance_id, event.button)
@@ -161,7 +231,7 @@ class InputMapper:
                 self._press(("btn", event.instance_id, event.button), action, now, out)
         elif et == pygame.JOYBUTTONUP:
             action = self.button_action(event.instance_id, event.button)
-            if action in (Action.COIN, Action.START, Action.PROFILE_NEXT):
+            if self._exit_roles(event.instance_id, event.button):
                 device = event.instance_id
                 held = self._cabinet_buttons.get(device, set())
                 if event.button in held:
@@ -169,7 +239,7 @@ class InputMapper:
                     chord = device in self._exit_started or device in self._exit_used
                     if chord:
                         self._exit_used.add(device)
-                    else:
+                    elif action:
                         out.append(action)
                     held.discard(event.button)
                     self._exit_started.pop(device, None)
@@ -227,9 +297,14 @@ class InputMapper:
         elif et == pygame.JOYDEVICEADDED:
             js = pygame.joystick.Joystick(event.device_index)
             self.joysticks[js.get_instance_id()] = js
-            log.info("Joystick connected: %s (%d buttons)", js.get_name(), js.get_numbuttons())
+            self.add_device(js.get_instance_id(), js.get_guid())
+            log.info("Joystick connected: %s (%d buttons) as instance %d, slot %s",
+                     js.get_name(), js.get_numbuttons(), js.get_instance_id(),
+                     self._slots[js.get_instance_id()][1])
         elif et == pygame.JOYDEVICEREMOVED:
             self.joysticks.pop(event.instance_id, None)
+            self.remove_device(event.instance_id)
+            log.info("Joystick disconnected: instance %d", event.instance_id)
             self._cabinet_buttons.pop(event.instance_id, None)
             self._chord_pending = {k: v for k, v in self._chord_pending.items() if k[0] != event.instance_id}
             self._chord_used = {k for k in self._chord_used if k[0] != event.instance_id}

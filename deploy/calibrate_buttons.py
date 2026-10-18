@@ -45,7 +45,12 @@ def main():
                         position = positions[index]
                         if not any((r["instance_id"], r["button"]) == key for r in results.values()):
                             joystick = joysticks[event.instance_id]
+                            # Instance ids shift between boots (e.g. when the UltraStik
+                            # enumerates first); the panel's rank among identical boards
+                            # is what JukeTube uses to find it again.
+                            same = sorted(i for i, j in joysticks.items() if j.get_guid() == joystick.get_guid())
                             results[position] = {"button": event.button, "instance_id": event.instance_id,
+                                                 "ordinal": same.index(event.instance_id),
                                                  "name": joystick.get_name(), "guid": joystick.get_guid()}
                             print(position, json.dumps(results[position]), flush=True)
                             index += 1

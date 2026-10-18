@@ -17,7 +17,7 @@ import pygame
 from ..engine import EngineConfig, Jukebox
 from ..config import default_config_path
 from ..favourites import Favourites
-from ..inputs import Action, InputMapper
+from ..inputs import Action, InputMapper, calibration_slots
 from ..models import Collection, Track, format_duration
 from ..player import Player
 from ..sources import Source, create_source
@@ -94,6 +94,7 @@ class App:
         self.toasts: list[tuple[str, float]] = []
         self._controls_path = Path(cfg.get("_path", default_config_path())).with_name("controls-visible.json")
         self.button_positions = {}
+        self.button_slots = {}
         self.profile_button = None
         try:
             positions_path = self._controls_path.with_name("cabinet-buttons.json")
@@ -101,23 +102,19 @@ class App:
             if isinstance(positions, dict):
                 self.button_positions = {p: r for p, r in positions.items()
                                          if isinstance(r, dict) and isinstance(r.get("button"), int)}
+                self.button_slots = calibration_slots(self.button_positions)
                 right_coin = self.button_positions.get("top_right")
-                if right_coin and isinstance(right_coin.get("instance_id"), int):
-                    self.profile_button = (right_coin["instance_id"], right_coin["button"])
+                if right_coin and "top_right" in self.button_slots:
+                    self.profile_button = (self.button_slots["top_right"], right_coin["button"])
                     self.inputs.set_device_button_action(*self.profile_button, Action.PROFILE_NEXT)
-                right_buttons = [self.button_positions.get(pos) for pos in
-                                 ("right_upper", "right_middle", "right_lower")]
-                if all(isinstance(item, dict) and isinstance(item.get("instance_id"), int)
-                       and isinstance(item.get("button"), int) for item in right_buttons):
-                    upper, middle, lower = right_buttons
-                    if upper["instance_id"] == middle["instance_id"]:
-                        self.inputs.set_device_chord(upper["instance_id"],
-                                                     (upper["button"], middle["button"]),
-                                                     Action.VOLUME_UP)
-                    if middle["instance_id"] == lower["instance_id"]:
-                        self.inputs.set_device_chord(middle["instance_id"],
-                                                     (middle["button"], lower["button"]),
-                                                     Action.VOLUME_DOWN)
+                right = ("right_upper", "right_middle", "right_lower")
+                if all(pos in self.button_slots for pos in right):
+                    (u_slot, m_slot, l_slot) = (self.button_slots[p] for p in right)
+                    upper, middle, lower = (self.button_positions[p]["button"] for p in right)
+                    if u_slot == m_slot:
+                        self.inputs.set_device_chord(u_slot, (upper, middle), Action.VOLUME_UP)
+                    if m_slot == l_slot:
+                        self.inputs.set_device_chord(m_slot, (middle, lower), Action.VOLUME_DOWN)
         except (OSError, ValueError):
             pass
         self.controls_visible = True
@@ -414,7 +411,12 @@ class App:
     def dispatch(self, action: Action) -> None:
         self.last_input = time.monotonic()
         if action == Action.QUIT:
-            self.confirm_exit = True
+            # Coin + Start held is the cabinet-wide "back to Attract-Mode"
+            # gesture (the fruit machine and MAME work the same way). It must
+            # exit straight away: the cabinet has no keyboard, so a dialog that
+            # isn't answered leaves it stuck until someone reboots it.
+            log.info("Coin + Start held: returning to Attract-Mode")
+            self.running = False
             return
         eng = self.engine
         if self.attract:
@@ -579,8 +581,8 @@ class App:
                  Action.SKIP: "Skip",
                  Action.PAUSE: "Pause", Action.VOLUME_DOWN: "Vol −",
                  Action.VOLUME_UP: "Vol +", Action.EXIT: "Exit"}
-        labels = {position: names.get(self.inputs.button_action(record.get("instance_id", -1),
-                                                                  record["button"]), "Unused")
+        labels = {position: names.get(self.inputs.slot_button_action(self.button_slots.get(position),
+                                                                       record["button"]), "Unused")
                   for position, record in self.button_positions.items()}
         # Mark physical positions participating in the two global shortcuts,
         # even before calibration has supplied the encoder button numbers.
