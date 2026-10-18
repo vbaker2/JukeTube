@@ -129,30 +129,59 @@ class MpvPlayer(Player):
         # After loadfile, events for the *previous* file can still arrive;
         # ignore playback events until mpv announces the new file started.
         self._awaiting_start = False
+        self._mpv_path, self._ytdlp_path = mpv_path, ytdlp_path
+        self._audio_device, self._extra_args = audio_device, list(extra_args or [])
+        self._generation = 0  # bumped per mpv process; stale readers ignore themselves
+        self._spawn_lock = threading.Lock()
+        self._spawn()
+
+    def _spawn(self) -> None:
+        """Start (or restart) the mpv process and its two IPC connections."""
         if os.name == "nt":
             self._ipc_path = rf"\\.\pipe\jukebox-mpv-{uuid.uuid4().hex[:8]}"
         else:
             self._ipc_path = os.path.join(tempfile.gettempdir(), f"jukebox-mpv-{uuid.uuid4().hex[:8]}.sock")
         args = [
-            mpv_path, "--idle=yes", "--no-video", "--no-terminal", "--really-quiet",
+            self._mpv_path, "--idle=yes", "--no-video", "--no-terminal", "--really-quiet",
             "--force-window=no", "--audio-display=no", "--cache=yes",
-            f"--input-ipc-server={self._ipc_path}", f"--volume={volume}",
+            f"--input-ipc-server={self._ipc_path}", f"--volume={self.volume}",
             "--ytdl-format=bestaudio/best", "--keep-open=no",
         ]
-        if ytdlp_path:
-            args.append(f"--script-opts=ytdl_hook-ytdl_path={ytdlp_path}")
-        if audio_device:
-            args.append(f"--audio-device={audio_device}")
-        args += extra_args or []
+        if self._ytdlp_path:
+            args.append(f"--script-opts=ytdl_hook-ytdl_path={self._ytdlp_path}")
+        if self._audio_device:
+            args.append(f"--audio-device={self._audio_device}")
+        args += self._extra_args
         log.info("Starting mpv: %s", " ".join(args))
         self._proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                       stderr=subprocess.DEVNULL)
+        self._generation += 1
         self._events = self._connect()
         self._cmd = self._connect()
         threading.Thread(target=self._drain, args=(self._cmd,), daemon=True).start()
         for i, prop in enumerate(("time-pos", "duration", "pause", "idle-active")):
             self._events.send(["observe_property", i + 1, prop])
-        threading.Thread(target=self._read_events, daemon=True).start()
+        threading.Thread(target=self._read_events, args=(self._events, self._generation),
+                         daemon=True).start()
+
+    def _command(self, command: list) -> None:
+        """Send a command; if mpv has died, restart it once and retry, so a
+        crashed player never takes the whole jukebox down with it."""
+        try:
+            self._cmd.send(command)
+            return
+        except OSError as exc:
+            log.warning("mpv command %s failed (%s); restarting mpv", command[0], exc)
+        with self._spawn_lock:
+            try:
+                self._close_process()
+                self._spawn()
+                self._cmd.send(command)
+            except (OSError, RuntimeError) as exc:
+                log.error("Couldn't restart mpv: %s", exc)
+                with self._state_lock:
+                    self.error = "Audio player unavailable"
+                raise RuntimeError("Audio player unavailable") from exc
 
     def _connect(self) -> _IpcConn:
         deadline = time.monotonic() + 10
@@ -172,9 +201,14 @@ class MpvPlayer(Player):
         while conn.readline():
             pass
 
-    def _read_events(self) -> None:
+    def _read_events(self, conn: _IpcConn, generation: int) -> None:
         while True:
-            line = self._events.readline()
+            try:
+                line = conn.readline()
+            except (OSError, ValueError):
+                line = b""
+            if generation != self._generation:
+                return  # mpv was restarted; this connection is obsolete
             if not line:
                 log.warning("mpv IPC closed")
                 with self._state_lock:
@@ -224,24 +258,31 @@ class MpvPlayer(Player):
             self.error = None
             self._loading_since = time.monotonic()
             self._awaiting_start = True
-        self._cmd.send(["loadfile", url, "replace"])
-        self._cmd.send(["set_property", "pause", False])
+        self._command(["loadfile", url, "replace"])
+        self._command(["set_property", "pause", False])
+
+    def _quiet(self, command: list) -> None:
+        # Controls (skip/pause/volume) must never crash the UI loop.
+        try:
+            self._command(command)
+        except RuntimeError:
+            pass
 
     def stop(self) -> None:
         with self._state_lock:
             self._busy = False
             self._finished = None
-        self._cmd.send(["stop"])
+        self._quiet(["stop"])
 
     def set_paused(self, paused: bool) -> None:
-        self._cmd.send(["set_property", "pause", paused])
+        self._quiet(["set_property", "pause", paused])
 
     def set_volume(self, volume: int) -> None:
         self.volume = max(0, min(100, volume))
-        self._cmd.send(["set_property", "volume", self.volume])
+        self._quiet(["set_property", "volume", self.volume])
 
     def seek(self, seconds: float) -> None:
-        self._cmd.send(["seek", seconds, "relative"])
+        self._quiet(["seek", seconds, "relative"])
 
     @property
     def loading(self) -> bool:
@@ -257,6 +298,10 @@ class MpvPlayer(Player):
             return reason
 
     def shutdown(self) -> None:
+        self._generation += 1  # the closing connection isn't an error
+        self._close_process()
+
+    def _close_process(self) -> None:
         try:
             self._cmd.send(["quit"])
         except OSError:
@@ -265,6 +310,7 @@ class MpvPlayer(Player):
             self._proc.wait(timeout=2)
         except subprocess.TimeoutExpired:
             self._proc.kill()
+            self._proc.wait(timeout=2)
         self._events.close()
         self._cmd.close()
         if os.name != "nt":

@@ -21,6 +21,8 @@ from .sources import Source
 
 log = logging.getLogger(__name__)
 
+FETCH_INTERVAL = 15.0  # seconds between autoplay (radio/house music) fetches
+
 
 @dataclass
 class EngineConfig:
@@ -60,6 +62,7 @@ class Jukebox:
         self.credits = 0  # in songs, not coins
         self._silent_since: float | None = clock()
         self._radio_future: Future | None = None
+        self._next_fetch = 0.0  # earliest time the next autoplay fetch may start
         self._failures = 0
         self.messages: deque[str] = deque(maxlen=10)
 
@@ -123,7 +126,8 @@ class Jukebox:
                 self.credits -= 1
             self.queue.insert(self.requested_count, QueueEntry(t, requested=True))
             added += 1
-        self._drop_filler()
+        if added:  # don't cut off house music for a request that queued nothing
+            self._drop_filler()
         msg = f"Queued {added} song{'s' if added != 1 else ''}" if added else (
             "Insert coin to pick a song" if not self.can_afford() else "Nothing new to queue")
         self._notify(msg)
@@ -179,6 +183,9 @@ class Jukebox:
         except Exception as exc:
             log.exception("play failed")
             self._notify(f"Couldn't play {entry.track.title}: {exc}")
+            # Count it so tick() backs off instead of failing through the
+            # whole queue one track per frame.
+            self._failures += 1
             self._finish_current()
             return False
         return True
@@ -223,6 +230,11 @@ class Jukebox:
     def _fetch_radio(self) -> None:
         if self._radio_future is not None or self._submit is None:
             return
+        # At most one fetch per FETCH_INTERVAL: an empty result (network down,
+        # or every track recently played) would otherwise re-fetch every frame.
+        if self._clock() < self._next_fetch:
+            return
+        self._next_fetch = self._clock() + FETCH_INTERVAL
         seed = self.history[0] if self.history else None
         self._radio_future = self._submit(self._load_radio, seed)
 
