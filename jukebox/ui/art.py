@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import io
 import logging
+import time
+from collections import OrderedDict
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
@@ -13,6 +15,9 @@ import requests
 
 log = logging.getLogger(__name__)
 
+MAX_RAW = 150  # full-size covers kept decoded in memory
+RETRY_AFTER = 60.0  # seconds before re-trying a cover that failed to load
+
 
 class ArtCache:
     def __init__(self, cache_dir: Path, workers: int = 4):
@@ -20,7 +25,10 @@ class ArtCache:
         self.dir.mkdir(parents=True, exist_ok=True)
         self._pool = ThreadPoolExecutor(workers, thread_name_prefix="art")
         self._pending: dict[str, Future] = {}
-        self._raw: dict[str, pygame.Surface | None] = {}
+        # Full-size decoded covers, least recently used first. Bounded, because
+        # the cabinet runs for days and sees thousands of distinct covers.
+        self._raw: OrderedDict[str, pygame.Surface] = OrderedDict()
+        self._failed: dict[str, float] = {}  # url -> time a retry is allowed
         self._scaled: dict[tuple[str, int], pygame.Surface] = {}
         self._session = requests.Session()
 
@@ -47,10 +55,13 @@ class ArtCache:
         scaled = self._scaled.get((url, size))
         if scaled is not None:
             return scaled
+        if url in self._failed:
+            if time.monotonic() < self._failed[url]:
+                return None
+            del self._failed[url]  # a network blip shouldn't hide a cover for good
         if url in self._raw:
             raw = self._raw[url]
-            if raw is None:
-                return None
+            self._raw.move_to_end(url)
             scaled = pygame.transform.smoothscale(raw, (size, size))
             self._scaled[(url, size)] = scaled
             return scaled
@@ -68,7 +79,12 @@ class ArtCache:
                 raw = _square(pygame.image.load(io.BytesIO(data)).convert())
             except (pygame.error, ValueError) as exc:
                 log.debug("art decode failed %s: %s", url, exc)
+        if raw is None:
+            self._failed[url] = time.monotonic() + RETRY_AFTER
+            return None
         self._raw[url] = raw
+        while len(self._raw) > MAX_RAW:
+            self._raw.popitem(last=False)
         if len(self._scaled) > 400:
             self._scaled.clear()
         return self.get(url, size)

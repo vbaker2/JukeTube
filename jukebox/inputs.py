@@ -124,18 +124,20 @@ class InputMapper:
         return next((i for i, s in self._slots.items() if s == slot), None)
 
     def add_device(self, instance_id: int, guid: str) -> None:
-        """Register a connected joystick; it takes the next ordinal for its guid."""
-        ordinal = sum(1 for s in self._slots.values() if s[0] == guid)
+        """Register a connected joystick in the lowest free ordinal for its guid.
+
+        Ordinals are never renumbered on removal, so if one of two identical
+        panels drops off the USB hub and comes back, it gets its own slot back
+        rather than the two panels swapping calibrations."""
+        if instance_id in self._slots:
+            return  # duplicate JOYDEVICEADDED
+        taken = {s[1] for s in self._slots.values() if s[0] == guid}
+        ordinal = next(n for n in range(len(taken) + 1) if n not in taken)
         self._slots[instance_id] = (guid, ordinal)
         self._rebuild_device_maps()
 
     def remove_device(self, instance_id: int) -> None:
         self._slots.pop(instance_id, None)
-        # Re-number the remaining devices of each guid in connection order.
-        by_guid: dict[str, list[int]] = {}
-        for inst in sorted(self._slots):
-            by_guid.setdefault(self._slots[inst][0], []).append(inst)
-        self._slots = {inst: (guid, n) for guid, insts in by_guid.items() for n, inst in enumerate(insts)}
         self._rebuild_device_maps()
 
     def _rebuild_device_maps(self) -> None:
@@ -165,6 +167,13 @@ class InputMapper:
             if action in (Action.COIN, Action.START):
                 roles.add(action)
         return roles
+
+    def _is_exit_chord(self, instance_id: int, held: set[int]) -> bool:
+        """Coin and Start held on two *different* buttons of one panel (a single
+        button that happens to count as both must not quit on its own)."""
+        roles = {b: self._exit_roles(instance_id, b) for b in held}
+        return any(Action.COIN in roles[c] and Action.START in roles[s]
+                   for c in held for s in held if c != s)
 
     @staticmethod
     def _action(name: str) -> Action | None:
@@ -208,8 +217,7 @@ class InputMapper:
             if self._exit_roles(event.instance_id, event.button):
                 held = self._cabinet_buttons.setdefault(event.instance_id, set())
                 held.add(event.button)
-                roles = set().union(*(self._exit_roles(event.instance_id, b) for b in held))
-                if roles >= {Action.COIN, Action.START}:
+                if self._is_exit_chord(event.instance_id, held):
                     self._exit_started.setdefault(event.instance_id, now)
                 return out
             chord_key = (event.instance_id, event.button)

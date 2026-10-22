@@ -402,7 +402,10 @@ class ReorderScreen(Screen):
             self.items = [g["name"] for g in source_genres if isinstance(g, dict) and g.get("name")]
         else:
             self.title = "Arrange home menu"
-            self.items = [row.title for row in HomeScreen(app)._fixed()]
+            # Reuse the live home screen: constructing a new HomeScreen would
+            # start a network load and overwrite app.home_art_candidates.
+            home = app.stack[0] if app.stack and isinstance(app.stack[0], HomeScreen) else None
+            self.items = [row.title for row in home._fixed()] if home else []
             # Use saved order first; current non-fixed rows arrive asynchronously.
             self.items = list(dict.fromkeys(app.home_order + self.items))
             if app.stack and isinstance(app.stack[0], HomeScreen):

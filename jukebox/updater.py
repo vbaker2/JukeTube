@@ -37,6 +37,8 @@ class UpdateAgent:
         self._ready: str | None = None
         self._applying = False
         self._retry_after = 0.0
+        self._failed_commit: str | None = None
+        self._engine = None  # set by restore_queue; lets an update keep credits
         self._stopped = threading.Event()
         self._worker: threading.Thread | None = None
 
@@ -76,8 +78,8 @@ class UpdateAgent:
             capture_output=True, text=True, timeout=30, check=True,
         )
         commit = result.stdout.split()[0]
-        if not commit or commit == self._installed_commit():
-            return
+        if not commit or commit == self._installed_commit() or commit == self._failed_commit:
+            return  # nothing new, or already known to fail the cabinet tests
         if self.stage.exists():
             shutil.rmtree(self.stage)
         subprocess.run(["git", "clone", "--quiet", "--depth", "1", "--branch", "master",
@@ -96,6 +98,7 @@ class UpdateAgent:
         if test.returncode:
             log.error("Update %s failed cabinet tests:\n%s\n%s", commit[:12],
                       test.stdout[-5000:], test.stderr[-5000:])
+            self._failed_commit = commit  # don't re-clone and re-test it every poll
             return
         log.info("Update %s passed cabinet tests and is ready", commit[:12])
         with self._lock:
@@ -108,7 +111,18 @@ class UpdateAgent:
             return ""
 
     def restore_queue(self, engine) -> None:
-        """Restore queued songs saved immediately before an in-place update."""
+        """Restore queued songs (and credits) saved immediately before an in-place update."""
+        self._engine = engine
+        credits_path = self.state_dir / "update-credits.json"
+        try:
+            saved = int(json.loads(credits_path.read_text()))
+            engine.credits = max(engine.credits, saved)
+            credits_path.unlink()
+            log.info("Restored %d credit(s) after software update", engine.credits)
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError, TypeError) as exc:
+            log.error("Couldn't restore credits after update: %s", exc)
         path = self.state_dir / "update-queue.json"
         try:
             entries = json.loads(path.read_text())
@@ -149,16 +163,23 @@ class UpdateAgent:
                 self._applying = False
 
     def _announce(self) -> None:
+        """Say "Updating software". Best effort: it runs on the UI thread just
+        before the restart, so it must be quick and must never block an install."""
         speaker = shutil.which("espeak-ng") or shutil.which("espeak")
         mpv = shutil.which("mpv")
         if not speaker or not mpv:
-            raise RuntimeError("voice announcement needs espeak-ng and mpv")
-        with tempfile.TemporaryDirectory(prefix="juketube-update-voice-") as tmp:
-            wav = Path(tmp) / "updating.wav"
+            log.info("Skipping update announcement (needs espeak-ng and mpv)")
+            return
+        try:
+            wav = self.state_dir / "updating.wav"
             subprocess.run([speaker, "-w", str(wav), "Updating software"],
-                           check=True, timeout=15)
-            subprocess.run([mpv, "--no-video", "--really-quiet", str(wav)],
-                           check=True, timeout=20)
+                           check=True, timeout=5, capture_output=True)
+            # Detached, so it keeps talking while JukeTube restarts.
+            subprocess.Popen([mpv, "--no-video", "--really-quiet", str(wav)],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+        except (OSError, subprocess.SubprocessError) as exc:
+            log.warning("Update announcement failed: %s", exc)
 
     def _install(self, commit: str, queue: list[QueueEntry]) -> None:
         # Only repository files are copied. Cabinet credentials, config,
@@ -178,6 +199,8 @@ class UpdateAgent:
             tmp_queue = self.state_dir / "update-queue.tmp"
             tmp_queue.write_text(json.dumps(pending))
             os.replace(tmp_queue, queue_path)
+            if self._engine is not None and self._engine.credits:
+                (self.state_dir / "update-credits.json").write_text(str(self._engine.credits))
             tmp_marker = self.state_dir / "installed-commit.tmp"
             tmp_marker.write_text(commit + "\n")
             os.replace(tmp_marker, marker)
