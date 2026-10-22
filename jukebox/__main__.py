@@ -12,12 +12,61 @@ from pathlib import Path
 
 from .config import cache_dir, load_config
 
+# Seconds the process may spend shutting down after the player quits before it
+# is ended regardless. The cabinet has no keyboard: if JukeTube doesn't exit,
+# Attract-Mode never comes back and the only way out is a power cycle.
+EXIT_TIMEOUT = 3.0
+
+
+def init_pygame() -> None:
+    """Start only the pygame parts JukeTube uses.
+
+    Not pygame.init(): that also opens pygame's audio (SDL mixer on
+    PulseAudio), which JukeTube never uses because mpv plays the music. On
+    2026-10-22 that unused audio thread deadlocked inside pygame.quit() after
+    the panels were replugged, and the cabinet hung on Coin + Start."""
+    import pygame
+
+    pygame.display.init()
+    pygame.font.init()
+    pygame.joystick.init()
+
+
+def finish(restart: bool) -> None:
+    """Leave the process (or re-exec it for an update) without ever hanging."""
+    import threading
+
+    def hard_exit() -> None:
+        logging.shutdown()
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.flush()
+            except (OSError, ValueError):
+                pass
+        if restart:
+            os.execv(sys.executable, [sys.executable, "-m", "jukebox", *sys.argv[1:]])
+        # os._exit also skips joining worker threads still blocked on the
+        # network, which would otherwise delay the return to Attract-Mode.
+        os._exit(0)
+
+    watchdog = threading.Timer(EXIT_TIMEOUT, lambda: (
+        logging.getLogger(__name__).warning("Shutdown stalled; exiting anyway"), hard_exit()))
+    watchdog.daemon = True
+    watchdog.start()
+    try:
+        import pygame
+
+        pygame.quit()
+    except Exception:  # never let cleanup stop the exit
+        pass
+    hard_exit()
+
 
 def list_inputs() -> int:
     """Print joystick/keyboard events so cabinet owners can map buttons."""
     import pygame
 
-    pygame.init()
+    init_pygame()
     pygame.display.set_mode((640, 200))
     pygame.display.set_caption("Jukebox input test - press buttons, ESC twice to quit")
     print("Press keys / move sticks / press buttons. ESC twice to quit.")
@@ -69,8 +118,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.free_play:
         cfg["jukebox"]["free_play"] = True
 
-    import pygame
-
     from .player import create_player
     from .sources import create_source
     from .ui.app import App
@@ -100,14 +147,12 @@ def main(argv: list[str] | None = None) -> int:
         source = create_source(src_cfg["name"], opts)
     player, warning = create_player(cfg["audio"], simulate=args.demo or args.silent)
 
-    pygame.init()
+    init_pygame()
     app = App(cfg, source, player, cache_dir(), player_warning=warning,
               screenshot=args.screenshot, max_frames=args.frames)
     app.run()
-    pygame.quit()
-    if os.environ.pop("JUKEBOX_UPDATE_RESTART", None) == "1":
-        os.execv(sys.executable, [sys.executable, "-m", "jukebox", *sys.argv[1:]])
-    return 0
+    finish(restart=os.environ.pop("JUKEBOX_UPDATE_RESTART", None) == "1")
+    return 0  # not reached: finish() exits or re-execs
 
 
 if __name__ == "__main__":

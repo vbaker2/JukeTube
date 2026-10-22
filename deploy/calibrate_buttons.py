@@ -10,12 +10,13 @@ import time
 
 import pygame
 
+from jukebox.__main__ import init_pygame
 from jukebox.ui.controls import BUTTON_POSITIONS, BUTTON_PROMPTS, draw_labelled_layout
 from jukebox.ui.theme import Theme
 
 
 def main():
-    pygame.init()
+    init_pygame()  # no pygame audio: it can deadlock on exit (see jukebox/__main__.py)
     display = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
     pygame.display.set_caption("Jukebox button calibration")
     pygame.mouse.set_visible(False)

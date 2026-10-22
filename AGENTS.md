@@ -95,6 +95,11 @@ config.example.toml documented config; keep it in sync with config.DEFAULTS
   confirmation dialog in front of it: the cabinet has no keyboard, and on
   2026-10-18 a "SELECT to confirm" dialog left the owner rebooting the cabinet.
   Plain buttons 8 + 9 always count for this, regardless of calibration.
+- **Exiting must never block.** Start pygame with `init_pygame()` (display, font,
+  joystick), never `pygame.init()`: its unused SDL mixer deadlocked in
+  `pygame.quit()` on PulseAudio on 2026-10-22 and hung the cabinet. `finish()`
+  in `__main__.py` ends the process (or re-execs for updates) with a
+  3-second watchdog; keep every exit path going through it.
 - **Never key cabinet calibration on SDL instance ids.** They depend on
   enumeration order: the UltraStik usually connects first and takes instance 0,
   pushing the DragonRise panels to 1 and 2. Calibration is resolved through
